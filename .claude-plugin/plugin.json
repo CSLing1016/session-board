@@ -1,0 +1,1 @@
+{ "name": "session-board", "version": "0.1.0", "description": "A dashboard of the sessions you chose to watch: status, latest action, and what each one needs from you", "types": "./types/index.d.ts" }
