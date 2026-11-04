@@ -1,0 +1,11 @@
+{
+  "name": "session-board",
+  "owner": { "name": "CSLing1016" },
+  "plugins": [
+    {
+      "name": "session-board",
+      "source": "./",
+      "description": "A dashboard of the sessions you chose to watch: status, latest action, and what each one needs from you"
+    }
+  ]
+}
