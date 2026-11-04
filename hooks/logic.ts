@@ -21,6 +21,15 @@ export const BADGE_COLOR: Record<Status, string> = {
   offline: '#383838',
 }
 
+// Lighter than the label behind the same status: a thin line in its color would hardly show.
+export const BORDER_COLOR: Record<Status, string> = {
+  calling: '#c4635a',
+  working: '#5f8bb0',
+  done: '#6e9a7c',
+  idle: '#6a6a6a',
+  offline: '#4a4a4a',
+}
+
 export const FAILED_SENTENCE = '這輪跑完了，但我沒能整理出摘要，老大幫忙看一下。'
 
 // A session without the desktop app has no local_ id: it goes by its own, under this prefix.
@@ -67,6 +76,8 @@ function baseName(path: unknown): string {
 
 // Only short, chosen fields: a full command or file body could hold a secret.
 export function describeTool(tool: string, input: Record<string, unknown>): string | undefined {
+  // The desktop's wrap-up comes well before the turn ends: without this the card looks stuck on the last command.
+  if (tool === 'mcp__ccd_turn__wrap_up') return '正在收尾'
   if (tool.startsWith('mcp__ccd_turn__')) return undefined
   const about = typeof input.description === 'string' ? input.description.slice(0, 60) : ''
   switch (tool) {

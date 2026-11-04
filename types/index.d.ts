@@ -41,6 +41,9 @@ export type Card = Watch & {
   updatedAt?: number
 }
 
+// The session the board is open in, for adding it directly.
+export type SelfInfo = { localId: string; title: string; link: string; cwd: string; isWorking: boolean }
+
 export type Candidate = { localId: string; title: string; folder: string; link: string; hasReport: boolean; cwd?: string }
 export type View = 'board' | 'pick' | 'edit' | 'delete' | 'form'
 export type Draft = { localId: string; link: string; title: string; description: string; isEditing: boolean; cwd?: string }
@@ -55,6 +58,7 @@ declare module 'claude-code' {
       notice: string
       isMenuOpen: boolean
       isPaneOpen: boolean
+      self: SelfInfo | null
     }
   }
 }

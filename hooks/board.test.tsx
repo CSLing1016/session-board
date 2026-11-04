@@ -50,6 +50,41 @@ test('a card that is calling shows its sentence and 知道了', async ($, on) =>
   await ui.unmount()
 })
 
+const ME = { localId: 'local_me', title: '當前任務', link: 'claude://me', cwd: '/x', isWorking: true }
+
+test('an unwatched current session offers to add it, above the others', async ($, on) => {
+  on('state.get', (_, e) => ({
+    value:
+      e.key === 'cards' ? { value: [CALLING], version: 1 } : e.key === 'self' ? { value: ME, version: 1 } : { value: undefined, version: 0 },
+  }))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect((await ui.find({ type: 'Text', text: /^當前對話$/ }))?.text).toBe('當前對話')
+    expect(await ui.find({ type: 'Button', key: 'add-self' })).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'edit-self' })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /其他對話/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'open-local_a' })).toBeTruthy()
+    await ui.unmount()
+  }
+})
+
+test('a watched current session has no way to open itself', async ($, on) => {
+  on('state.get', (_, e) => ({
+    value:
+      e.key === 'cards'
+        ? { value: [{ ...CALLING, localId: 'local_me' }], version: 1 }
+        : e.key === 'self'
+          ? { value: ME, version: 1 }
+          : { value: undefined, version: 0 },
+  }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Button', key: 'add-self' })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'open-local_me' })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'ack-local_me' })).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /還沒有監控其他/ }))?.text).toBe('還沒有監控其他對話。')
+  await ui.unmount()
+})
+
 test('a card shows when it last updated', async ($, on) => {
   on('state.get', (_, e) => ({
     value: e.key === 'cards' ? { value: [{ ...CALLING, updatedAt: 1000 }], version: 1 } : { value: undefined, version: 0 },
@@ -123,7 +158,7 @@ test('on the terminal the menu is keyboard buttons, and adding lists this sessio
   await ui.press({ key: 'menu' })
   await ui.press({ key: 'menu-add' })
   expect((await ui.find({ type: 'Text', text: /選要新增/ }))?.text).toBe('選要新增監控的對話')
-  expect((await ui.find({ type: 'Button', key: 'pick-cli_abc' }))?.text).toContain('這個對話')
+  expect(await ui.find({ type: 'Button', key: 'pick-cli_abc' })).toBeFalsy()
   await ui.unmount()
 })
 

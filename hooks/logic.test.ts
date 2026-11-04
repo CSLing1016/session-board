@@ -49,7 +49,8 @@ test('the latest action never carries a whole command', () => {
   expect(describeTool('Bash', { command: 'curl -H secret', description: '跑測試' })).toBe('正在跑指令：跑測試')
   expect(describeTool('Bash', { command: 'curl -H secret' })).toBe('正在跑指令')
   expect(describeTool('Edit', { file_path: '/a/report.py' })).toBe('正在編輯 report.py')
-  expect(describeTool('mcp__ccd_turn__wrap_up', {})).toBeUndefined()
+  expect(describeTool('mcp__ccd_turn__update_plan', {})).toBeUndefined()
+  expect(describeTool('mcp__ccd_turn__wrap_up', {})).toBe('正在收尾')
 })
 
 test('only subagents still running are listed, each with its latest action', () => {

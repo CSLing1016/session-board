@@ -1,9 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Candidate, Card, Draft, Presence, Report, Terminal, View, Watch } from '../types'
-import { BADGE, BADGE_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, helpersOf, mainAction, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, updatedLabel } from './logic'
+import type { Candidate, Card, Draft, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
+import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, helpersOf, mainAction, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, updatedLabel } from './logic'
 
+const PLUGIN = 'session-board'
 const PANE = 'session-board'
 const APP = 'ccd_session_mgmt'
 // A Button's label has no font size: this draws the same gray as the ✕ beside a larger ☰, its
@@ -19,6 +20,7 @@ const REFRESH_MS = 3000
 const PRESENCE_EVERY = 10 // ticks, so about every 30 seconds
 const BAND_EVERY = 4 // ticks: only the band's count is needed while the pane is closed
 const HELPERS_SHOWN = 3
+const DIVIDER_LENGTH = 200 // Wider than any pane: the Text cuts it to fit.
 const BAR_ROWS = 40 // More than any card's text wraps to.
 const BOSS_EVERY = 3 // about one sentence in three says 老大
 const SESSIONS_SHOWN = 30
@@ -80,6 +82,7 @@ const draft = atom({ plugin: 'session-board', key: 'draft' } as const, null as D
 const notice = atom({ plugin: 'session-board', key: 'notice' } as const, '')
 const isMenuOpen = atom({ plugin: 'session-board', key: 'isMenuOpen' } as const, false)
 const isPaneOpen = atom({ plugin: 'session-board', key: 'isPaneOpen' } as const, false)
+const self = atom({ plugin: 'session-board', key: 'self' } as const, null as SelfInfo | null)
 
 // Every session: what it says about itself.
 let localId: string | undefined
@@ -87,6 +90,7 @@ let current: Report | undefined
 let turn = ''
 let writes: Promise<unknown> = Promise.resolve()
 let terminal: Terminal | undefined
+let selfNames: Omit<SelfInfo, 'isWorking'> | undefined
 const helperActions = new Map<string, string>()
 let helpersChanged = false
 
@@ -233,6 +237,44 @@ async function refresh($: any, checkPresence = false): Promise<void> {
   }
   const sorted = sortCards(next)
   await update($, cards, old => (JSON.stringify(old) === JSON.stringify(sorted) ? old : sorted))
+  await refreshSelf($, checkPresence).catch(() => undefined)
+}
+
+async function titleOfThisCliSession($: any, home: string): Promise<string | undefined> {
+  const root = `${home}/.claude/projects`
+  const name = `${await $.session.id()}.jsonl`
+  for (const folder of await listFolder($, root)) {
+    const path = `${root}/${folder.name}/${name}`
+    if (await $.fs.exists(path)) return titleFromTranscript(await grep($, ['-E', '"type":"(ai|custom)-title"', path]))
+  }
+
+  return undefined
+}
+
+// The title is looked up only now and then: it rarely changes, and a refresh runs every few seconds.
+async function refreshSelf($: any, lookUp: boolean): Promise<void> {
+  const id = await ownId($)
+  if (!id) return
+  if (lookUp || !selfNames || selfNames.localId !== id) {
+    const cwd: string = await $.session.cwd()
+    if (await hasApp($)) {
+      const got = await callApp($, 'get_session', { session_id: 'self' })
+      selfNames = { localId: id, title: got.title || folderName(cwd) || '當前對話', link: got.link ?? '', cwd }
+    } else {
+      const title = await titleOfThisCliSession($, (await $.env.get('HOME')) ?? '').catch(() => undefined)
+      selfNames = { localId: id, title: title || folderName(cwd) || '當前對話', link: '', cwd }
+    }
+  }
+  const next: SelfInfo = { ...selfNames, isWorking: current?.phase === 'working' }
+  await update($, self, old => (JSON.stringify(old) === JSON.stringify(next) ? old : next))
+}
+
+async function addSelf($: any, one: SelfInfo): Promise<void> {
+  const list = await readWatches($)
+  if (list.some(watch => watch.localId === one.localId)) return
+  const added: Watch = { localId: one.localId, title: one.title, description: '', link: one.link, addedAt: await $.clock.now(), ...(one.cwd ? { cwd: one.cwd } : {}) }
+  await writeWatches($, [...list, added])
+  await refresh($)
 }
 
 async function tick($: any): Promise<void> {
@@ -339,13 +381,11 @@ async function openPicker($: any): Promise<void> {
         }))
       : await desktopFromRecords($, home)
     const found = [...(await cliSessions($, home).catch(() => [])), ...desktop]
-    // A new CLI session has no transcript yet, and it is the likeliest one to add.
-    const own = fromApp ? undefined : await ownId($)
-    const self = found.find(one => one.localId === own)
-    const all = own ? [self ?? { localId: own, title: '這個對話', folder: '', link: '', hasReport: true, cwd: await $.session.cwd() }, ...found.filter(one => one !== self)] : found
+    // The current session has its own buttons at the top of the board.
+    const own = await ownId($)
     const list: Candidate[] = []
-    for (const one of all) {
-      if (watched.has(one.localId)) continue
+    for (const one of found) {
+      if (watched.has(one.localId) || one.localId === own) continue
       list.push({ ...one, hasReport: await $.fs.exists(`${folderOf(home)}/reports/${one.localId}.json`).catch(() => false) })
     }
     await update($, candidates, () => list)
@@ -522,6 +562,17 @@ async function drawBoard($: any, e: any): Promise<any> {
 
   const list = await read($, cards)
   const menuOpen = await read($, isMenuOpen)
+  const me = await read($, self)
+  const myCard = me ? list.find(card => card.localId === me.localId) : undefined
+  const others = list.filter(card => card !== myCard)
+  const currentBackground = isTerminal ? '#2c2c2c' : '#262626' // No theme key for a raised card: tuned for the dark theme.
+  const badge = (status: Status) => (
+    <Box position="absolute" top={0} right={0}>
+      <Text bold color="#ffffff" backgroundColor={BADGE_COLOR[status]}>
+        {` ${BADGE[status]} `}
+      </Text>
+    </Box>
+  )
   const drawHelpers = (helpers: Card['helpers'] = []) =>
     helpers.length > 0 && (
       <Box flexDirection="column" marginTop={1} marginLeft={1}>
@@ -540,37 +591,13 @@ async function drawBoard($: any, e: any): Promise<any> {
       </Box>
     )
 
-  return (
-    <Box position="relative" flexDirection="column" gap={1}>
-      <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-        <Text dimColor>{list.filter(card => card.status === 'calling').length} 個找你・共 {list.length} 個</Text>
-        <Box position="relative">
-          {!isTerminal ? (
-            <>
-              <Svg source={MENU_ICON} alt="選單" width={34} height={28} />
-              {/* Laid over the drawing: an Svg takes no press, a Client takes no Svg. */}
-              <Box position="absolute" top={0} left={0} right={0} bottom={0}>
-                <Client key="menu" module="./menu-row.tsx" width="100%" height="100%" props={{ label: ' ', isQuiet: true }} />
-              </Box>
-            </>
-          ) : (
-            <Button key="menu" label="☰" onPress={() => void update($, isMenuOpen, open => !open)} />
-          )}
-        </Box>
-      </Box>
-      {shown}
-      {list.length === 0 && <Text dimColor>還沒有監控的對話。</Text>}
-      {list.map(card => (
-        <Box key={`card-${card.localId}`} flexDirection="column" borderStyle="round" paddingX={1}>
+  const drawCard = (card: Card, isCurrent: boolean) => (
+        <Box key={`card-${card.localId}`} flexDirection="column" borderStyle="round" borderColor={BORDER_COLOR[card.status]} backgroundColor={isCurrent ? currentBackground : undefined} paddingX={1}>
           {/* The label floats over room the padding keeps free: a shrinking row Box clips its Text on the desktop instead of wrapping it. */}
           <Box position="relative" flexDirection="column" paddingRight={13}>
             {/* One string: a long sentence wraps on the desktop, and this title, split in two children, did not. */}
             <Text bold>{`${card.title}${card.presence === 'archived' ? '（已封存）' : card.presence === 'deleted' ? '（已刪除）' : ''}`}</Text>
-            <Box position="absolute" top={0} right={0}>
-              <Text bold color="#ffffff" backgroundColor={BADGE_COLOR[card.status]}>
-                {` ${BADGE[card.status]} `}
-              </Text>
-            </Box>
+            {badge(card.status)}
           </Box>
           {card.description !== '' && <Text dimColor>{card.description}</Text>}
           {(card.activity !== '' || card.sentence !== '' || card.status === 'offline') && (
@@ -586,7 +613,7 @@ async function drawBoard($: any, e: any): Promise<any> {
           {/* The time floats like the status label: the desktop did not draw it as the second item of this row. */}
           <Box position="relative" flexDirection="column" minHeight={1} marginTop={1}>
             <Box flexDirection="row" gap={1}>
-            {(card.link !== '' || resumeCommand(card.localId)) && card.presence !== 'deleted' && (
+            {!isCurrent && (card.link !== '' || resumeCommand(card.localId)) && card.presence !== 'deleted' && (
               <Button key={`open-${card.localId}`} onPress={() => void openCard($, card)}>
                 開啟對話
               </Button>
@@ -612,7 +639,54 @@ async function drawBoard($: any, e: any): Promise<any> {
             )}
           </Box>
         </Box>
-      ))}
+  )
+
+  return (
+    <Box position="relative" flexDirection="column" gap={1}>
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+        <Text dimColor>{list.filter(card => card.status === 'calling').length} 個找你・共 {list.length} 個</Text>
+        <Box position="relative">
+          {!isTerminal ? (
+            <>
+              <Svg source={MENU_ICON} alt="選單" width={34} height={28} />
+              {/* Laid over the drawing: an Svg takes no press, a Client takes no Svg. */}
+              <Box position="absolute" top={0} left={0} right={0} bottom={0}>
+                <Client key="menu" module="./menu-row.tsx" width="100%" height="100%" props={{ label: ' ', isQuiet: true }} />
+              </Box>
+            </>
+          ) : (
+            <Button key="menu" label="☰" onPress={() => void update($, isMenuOpen, open => !open)} />
+          )}
+        </Box>
+      </Box>
+      {shown}
+      {me && <Text size="footnote" dimColor>當前對話</Text>}
+      {myCard && drawCard(myCard, true)}
+      {me && !myCard && (
+        <Box key="current-unwatched" flexDirection="column" borderStyle="round" borderColor={BORDER_COLOR[me.isWorking ? 'working' : 'idle']} backgroundColor={currentBackground} paddingX={1}>
+          <Box position="relative" flexDirection="column" paddingRight={13}>
+            <Text bold>{me.title}</Text>
+            {badge(me.isWorking ? 'working' : 'idle')}
+          </Box>
+          <Text dimColor>還沒加入監控</Text>
+          <Box flexDirection="row" gap={1} marginTop={1}>
+            <Button key="add-self" variant="primary" onPress={() => void addSelf($, me)}>直接新增</Button>
+            <Button
+              key="edit-self"
+              onPress={() => {
+                void update($, draft, () => ({ localId: me.localId, link: me.link, title: me.title, description: '', isEditing: false, cwd: me.cwd }))
+                void update($, view, () => 'form' as View)
+              }}
+            >
+              編輯並新增
+            </Button>
+          </Box>
+        </Box>
+      )}
+      {/* Cut to one row by the Text: a Box's own line would be a whole cell thick on the terminal. */}
+      {me && <Text dimColor wrap="truncate-end">{`其他對話 ${'─'.repeat(DIVIDER_LENGTH)}`}</Text>}
+      {others.length === 0 && <Text dimColor>{me ? '還沒有監控其他對話。' : '還沒有監控的對話。'}</Text>}
+      {others.map(card => drawCard(card, false))}
       {/* Last in the tree: an absolute Box is painted over those before it, and over nothing after it. */}
       {menuOpen && (
         <Box
@@ -684,6 +758,8 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    // The board's own session lookups pass through here too: they are not this session working.
+    if (next.origin.plugin === PLUGIN) return next(e)
     const input = e as unknown as Record<string, unknown>
     const said = mainAction(e.tool, input)
     if (said) void report($, { phase: 'working', activity: said })
