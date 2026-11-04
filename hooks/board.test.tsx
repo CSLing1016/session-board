@@ -59,6 +59,15 @@ test('a card shows when it last updated', async ($, on) => {
   await ui.unmount()
 })
 
+test('the terminal draws the bar beside a card\'s reply as a thin glyph', async ($, on) => {
+  on('state.get', (_, e) => ({
+    value: e.key === 'cards' ? { value: [CALLING], version: 1 } : { value: undefined, version: 0 },
+  }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /┃/ })).toBeTruthy()
+  await ui.unmount()
+})
+
 test('a card lists its running subagents, three at most', async ($, on) => {
   const helpers = ['甲', '乙', '丙', '丁'].map(name => ({ id: name, description: name, activity: '正在讀 a.py' }))
   on('state.get', (_, e) => ({

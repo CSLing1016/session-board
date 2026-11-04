@@ -19,6 +19,7 @@ const REFRESH_MS = 3000
 const PRESENCE_EVERY = 10 // ticks, so about every 30 seconds
 const BAND_EVERY = 4 // ticks: only the band's count is needed while the pane is closed
 const HELPERS_SHOWN = 3
+const BAR_ROWS = 40 // More than any card's text wraps to.
 const BOSS_EVERY = 3 // about one sentence in three says 老大
 const SESSIONS_SHOWN = 30
 const CLI_SESSIONS_SHOWN = 15
@@ -415,8 +416,14 @@ async function pickFromMenu($: any, picked: string): Promise<void> {
 async function drawBoard($: any, e: any): Promise<any> {
   const { Box, Text, Button, Input, Client, Svg } = $.ui.resolve(e)
   const isTerminal = e.surface === 'terminal'
-  // The terminal has whole cells only: 1% would round to no bar at all.
-  const barWidth = isTerminal ? 1 : '1%'
+  // A filled cell is too wide and ▏ leaves gaps between rows: the box-drawing ┃ joins up and has some weight.
+  const quoteMark = isTerminal ? (
+    <Box position="absolute" top={0} bottom={0} left={0} width={1} overflow="hidden">
+      <Text color="#6a6a6a">{'┃\n'.repeat(BAR_ROWS)}</Text>
+    </Box>
+  ) : (
+    <Box position="absolute" top={0} bottom={0} left={0} width="1%" backgroundColor="#4a4a4a" />
+  )
   const mode = await read($, view)
   const message = await read($, notice)
   const shown = message ? <Text color="red">{message}</Text> : null
@@ -520,7 +527,7 @@ async function drawBoard($: any, e: any): Promise<any> {
       <Box flexDirection="column" marginTop={1} marginLeft={1}>
         <Text size="footnote" dimColor>{`子代理 ${helpers.length} 個執行中`}</Text>
         <Box position="relative" flexDirection="column" paddingLeft={2}>
-          <Box position="absolute" top={0} bottom={0} left={0} width={barWidth} backgroundColor="#4a4a4a" />
+          {quoteMark}
           {helpers.slice(0, HELPERS_SHOWN).map(helper => (
             <Text key={`helper-${helper.id}`} size="footnote">
               {helper.activity ? `${helper.description}：${helper.activity}` : helper.description}
@@ -569,7 +576,7 @@ async function drawBoard($: any, e: any): Promise<any> {
           {(card.activity !== '' || card.sentence !== '' || card.status === 'offline') && (
             <Box position="relative" flexDirection="column" marginTop={1} marginLeft={1} paddingLeft={2}>
               {/* A Box has no left-only border, so the quote bar is drawn; it spans every wrapped line, unlike a │ in the text. */}
-              <Box position="absolute" top={0} bottom={0} left={0} width={barWidth} backgroundColor="#4a4a4a" />
+              {quoteMark}
               {card.activity !== '' && <Text size="footnote">{card.activity}</Text>}
               {card.sentence !== '' && <Text size="footnote">{card.sentence}</Text>}
               {card.status === 'offline' && <Text size="footnote" dimColor>重開這個對話後才會回報。</Text>}
