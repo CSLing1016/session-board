@@ -24,7 +24,7 @@ const CALLING: Card = {
   addedAt: 1,
   status: 'calling',
   activity: '',
-  sentence: '老大，週報做好了，請你驗收。',
+  sentence: '週報做好了，請你驗收。',
   presence: 'here',
   helpers: [],
 }
@@ -47,6 +47,15 @@ test('a card that is calling shows its sentence and 知道了', async ($, on) =>
   expect((await ui.find({ type: 'Text', text: /請你驗收/ }))?.text).toBe(CALLING.sentence)
   expect(await ui.find({ type: 'Button', key: 'ack-local_a' })).toBeTruthy()
   expect(await ui.find({ type: 'Button', key: 'open-local_a' })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('a card shows when it last updated', async ($, on) => {
+  on('state.get', (_, e) => ({
+    value: e.key === 'cards' ? { value: [{ ...CALLING, updatedAt: 1000 }], version: 1 } : { value: undefined, version: 0 },
+  }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /\d\d:\d\d:\d\d/ })).toBeTruthy()
   await ui.unmount()
 })
 
@@ -93,6 +102,19 @@ test('the menu holds only the three actions, and ✕ leaves from the top', async
   expect((await ui.find({ type: 'Text', text: /選要刪除/ }))?.text).toBe('選要刪除的監控')
   await ui.press({ key: 'close' })
   expect(await ui.find({ key: 'menu' })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('on the terminal the menu is keyboard buttons, and adding lists this session', async ($, on) => {
+  on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('env.get', () => ({ value: '/home/x' }))
+  on('session.cwd', () => ({ value: '/home/x/repo' }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'menu' })
+  await ui.press({ key: 'menu-add' })
+  expect((await ui.find({ type: 'Text', text: /選要新增/ }))?.text).toBe('選要新增監控的對話')
+  expect((await ui.find({ type: 'Button', key: 'pick-cli_abc' }))?.text).toContain('這個對話')
   await ui.unmount()
 })
 

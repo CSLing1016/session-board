@@ -1,11 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Report, Watch } from '../types'
-import { FAILED_SENTENCE, cardOf, describeTool, helpersOf, mainAction, parseSentence, sortCards, statusOf } from './logic'
+import { FAILED_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, openPlan, parseSentence, resumeCommand, sentencePrompt, sortCards, statusOf, updatedLabel } from './logic'
 
 const watch: Watch = { localId: 'local_a', title: 'A', description: '', link: '', addedAt: 1 }
 const ended = (kind: Report['kind'], endedAt = 10): Report => ({
-  localId: 'local_a', at: endedAt, phase: 'ended', activity: '', kind, sentence: '老大，好了。', endedAt,
+  localId: 'local_a', at: endedAt, phase: 'ended', activity: '', kind, sentence: '好了。', endedAt,
 })
 
 test('the status table', () => {
@@ -24,7 +24,7 @@ test('知道了 clears this turn only', () => {
 })
 
 test('the sentence keeps showing on 完成, and cards sort by status', () => {
-  expect(cardOf(watch, ended('none'), 'here').sentence).toBe('老大，好了。')
+  expect(cardOf(watch, ended('none'), 'here').sentence).toBe('好了。')
   const a = cardOf({ ...watch, localId: 'done' }, ended('none'), 'here')
   const b = cardOf({ ...watch, localId: 'call' }, ended('decide'), 'here')
   const c = cardOf({ ...watch, localId: 'off' }, undefined, 'here')
@@ -37,7 +37,7 @@ test('a sentence that cannot be read counts as needing the person', () => {
   expect(parseSentence('```json\n{"kind":"review","sentence":"老大，週報好了，請你驗收。"}\n```')).toEqual({
     kind: 'review', sentence: '老大，週報好了，請你驗收。',
   })
-  expect(parseSentence('{"kind":"none","sentence":"都好了"}').sentence).toBe('老大，都好了')
+  expect(parseSentence('{"kind":"none","sentence":"都好了"}').sentence).toBe('都好了')
 })
 
 test('a subagent\'s tool does not count as the session\'s latest action', () => {
@@ -70,4 +70,55 @@ test('a running subagent leaves the card asking for the person', () => {
   const card = cardOf(watch, { ...ended('decide'), helpers }, 'here')
   expect(card.status).toBe('calling')
   expect(card.helpers).toEqual(helpers)
+})
+
+test('only a CLI session offers a resume command', () => {
+  expect(resumeCommand(cliIdOf('abc'))).toBe('claude --resume abc')
+  expect(resumeCommand('local_abc')).toBeUndefined()
+})
+
+test('the app\'s session records become candidates, archived ones do not', () => {
+  expect(candidateFromRecord({ sessionId: 'local_a', title: '週報', cwd: '/x/repo' })).toEqual({
+    localId: 'local_a', title: '週報', folder: 'repo', link: 'claude://claude.ai/epitaxy/local_a', hasReport: false,
+  })
+  expect(candidateFromRecord({ sessionId: 'local_a', isArchived: true })).toBeUndefined()
+  expect(candidateFromRecord({ title: '沒有 id' })).toBeUndefined()
+})
+
+test('a transcript\'s title is its last real title line', () => {
+  const lines = [
+    JSON.stringify({ type: 'ai-title', aiTitle: '舊' }),
+    JSON.stringify({ type: 'user', text: '"type":"ai-title"' }),
+    JSON.stringify({ type: 'custom-title', customTitle: '新' }),
+    'not json',
+  ].join('\n')
+  expect(titleFromTranscript(lines)).toBe('新')
+  expect(titleFromTranscript('')).toBeUndefined()
+  expect(cwdFromTranscript('"cwd":"/Users/a/repo"\n')).toBe('/Users/a/repo')
+})
+
+test('only some sentences are asked to say 老大', () => {
+  expect(sentencePrompt('x', true)).toContain('這句要自然帶一次')
+  expect(sentencePrompt('x', false)).toContain('這句不要出現')
+})
+
+test('the update time names the day only when it is not today', () => {
+  const at = new Date(2026, 10, 4, 9, 5, 7).getTime()
+  expect(updatedLabel(at, new Date(2026, 10, 4, 18, 0, 0).getTime())).toBe('09:05:07')
+  expect(updatedLabel(at, new Date(2026, 10, 5, 8, 0, 0).getTime())).toBe('11/04 09:05:07')
+})
+
+test('a card carries the time of its last report', () => {
+  expect(cardOf(watch, ended('none', 42), 'here').updatedAt).toBe(42)
+  expect(cardOf(watch, undefined, 'here').updatedAt).toBeUndefined()
+})
+
+test('a running CLI session is gone back to, a closed one is resumed where it ran', () => {
+  const id = cliIdOf('abc')
+  const terminal = { app: 'iTerm.app', tty: '/dev/ttys003', pid: 1, cwd: "/a/it's" }
+  expect(openPlan(id, terminal, true)).toEqual({ kind: 'focus', app: 'iTerm.app', tty: '/dev/ttys003' })
+  expect(openPlan(id, { ...terminal, app: 'vscode' }, true)).toEqual({ kind: 'elsewhere', app: 'vscode' })
+  expect(openPlan(id, terminal, false)).toEqual({ kind: 'resume', app: 'iTerm.app', command: "cd '/a/it'\\''s' && claude --resume abc" })
+  expect(openPlan(id, undefined, false, '/b')).toEqual({ kind: 'resume', app: 'Apple_Terminal', command: "cd '/b' && claude --resume abc" })
+  expect(openPlan(id, undefined, false)).toEqual({ kind: 'unknown' })
 })

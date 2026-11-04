@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Candidate, Card, Draft, Presence, Report, View, Watch } from '../types'
-import { BADGE, BADGE_COLOR, cardOf, describeTool, helpersOf, mainAction, parseSentence, sentencePrompt, sortCards } from './logic'
+import type { Candidate, Card, Draft, Presence, Report, Terminal, View, Watch } from '../types'
+import { BADGE, BADGE_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, helpersOf, mainAction, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, updatedLabel } from './logic'
 
 const PANE = 'session-board'
 const APP = 'ccd_session_mgmt'
@@ -19,6 +19,58 @@ const REFRESH_MS = 3000
 const PRESENCE_EVERY = 10 // ticks, so about every 30 seconds
 const BAND_EVERY = 4 // ticks: only the band's count is needed while the pane is closed
 const HELPERS_SHOWN = 3
+const BOSS_EVERY = 3 // about one sentence in three says 老大
+const SESSIONS_SHOWN = 30
+const CLI_SESSIONS_SHOWN = 15
+const FOCUS_SCRIPTS: Record<string, string> = {
+  Apple_Terminal: `on run argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if tty of t is item 1 of argv then
+          set selected of t to true
+          set index of w to 1
+          activate
+          return "found"
+        end if
+      end repeat
+    end repeat
+  end tell
+end run`,
+  'iTerm.app': `on run argv
+  tell application "iTerm2"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if tty of s is item 1 of argv then
+            select w
+            tell t to select
+            tell s to select
+            activate
+            return "found"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+end run`,
+}
+const RESUME_SCRIPTS: Record<string, string> = {
+  Apple_Terminal: `on run argv
+  tell application "Terminal"
+    do script (item 1 of argv)
+    activate
+  end tell
+end run`,
+  'iTerm.app': `on run argv
+  tell application "iTerm2"
+    set w to (create window with default profile)
+    tell current session of w to write text (item 1 of argv)
+    activate
+  end tell
+end run`,
+}
+const TRANSCRIPTS_SCANNED = 60 // Most are desktop sessions: enough to find the CLI ones among them.
 
 const cards = atom({ plugin: 'session-board', key: 'cards' } as const, [] as Card[])
 const view = atom({ plugin: 'session-board', key: 'view' } as const, 'board' as View)
@@ -33,6 +85,7 @@ let localId: string | undefined
 let current: Report | undefined
 let turn = ''
 let writes: Promise<unknown> = Promise.resolve()
+let terminal: Terminal | undefined
 const helperActions = new Map<string, string>()
 let helpersChanged = false
 
@@ -69,12 +122,38 @@ async function writeWatches($: any, list: readonly Watch[]): Promise<void> {
   await $.fs.write(`${folderOf((await $.env.get('HOME')) ?? '')}/watch.json`, JSON.stringify(list, null, 2))
 }
 
+// The session list, the session's local_ id and whether a session still exists all come from the desktop app.
+async function hasApp($: any): Promise<boolean> {
+  return (await $.session.surfaces()).includes('desktop')
+}
+
+// $PPID of a child is this session's own process, and its terminal is what a window can be found by.
+async function whereThisRuns($: any): Promise<Terminal | undefined> {
+  try {
+    const got = await $.process.run(['sh', '-c', 'echo "$PPID $(ps -o tty= -p $PPID)"'], { timeoutMs: 5000 })
+    const [pid, tty] = got.stdout.trim().split(/\s+/)
+    if (!tty || tty === '??') return undefined
+
+    return { app: (await $.env.get('TERM_PROGRAM')) ?? '', tty: `/dev/${tty}`, pid: Number(pid), cwd: await $.session.cwd() }
+  } catch {
+    return undefined
+  }
+}
+
 async function ownId($: any): Promise<string | undefined> {
   if (!localId) {
-    try {
-      localId = (await callApp($, 'get_session', { session_id: 'self' })).sessionId
-    } catch {
-      return undefined // Not a desktop session: nothing on the board can point at it.
+    const surfaces: readonly string[] = await $.session.surfaces()
+    if (surfaces.includes('desktop')) {
+      try {
+        localId = (await callApp($, 'get_session', { session_id: 'self' })).sessionId
+      } catch {
+        return undefined // The app may answer next time; a CLI id here would split this session in two.
+      }
+    } else if (surfaces.includes('terminal')) {
+      localId = cliIdOf(await $.session.id())
+      terminal = await whereThisRuns($)
+    } else {
+      return undefined // A plain -p run draws nowhere: nobody would watch it.
     }
   }
 
@@ -93,8 +172,9 @@ function report($: any, change: Partial<Report>): Promise<unknown> {
         activity: '',
         ...current,
         ...change,
+        ...(terminal ? { terminal } : {}),
         localId: id,
-        at: await $.clock.now(),
+        at: change.at ?? (await $.clock.now()),
       }
       await $.fs.write(`${folderOf(home)}/reports/${id}.json`, JSON.stringify(current))
     })
@@ -116,9 +196,9 @@ async function isWatched($: any): Promise<boolean> {
   return (await readWatches($)).some(one => one.localId === id)
 }
 
-async function summarize($: any, answer: string): Promise<{ kind: any; sentence: string }> {
+async function summarize($: any, answer: string, callsBoss: boolean): Promise<{ kind: any; sentence: string }> {
   try {
-    const reply = await $.model.complete({ model: 'haiku', prompt: sentencePrompt(answer), timeoutMs: 20000 })
+    const reply = await $.model.complete({ model: 'haiku', prompt: sentencePrompt(answer, callsBoss), timeoutMs: 20000 })
 
     return parseSentence(reply.isAnswered ? reply.text : '')
   } catch {
@@ -129,9 +209,14 @@ async function summarize($: any, answer: string): Promise<{ kind: any; sentence:
 async function refresh($: any, checkPresence = false): Promise<void> {
   const home = (await $.env.get('HOME')) ?? ''
   const watches = await readWatches($)
-  if (checkPresence) {
+  // Without the app nothing can tell: every card stays as it is rather than reading as deleted.
+  if (checkPresence && (await hasApp($))) {
     const found: Record<string, Presence> = {}
     for (const one of watches) {
+      if (resumeCommand(one.localId)) {
+        found[one.localId] = 'here'
+        continue
+      }
       try {
         found[one.localId] = (await callApp($, 'get_session', { session_id: one.localId })).isArchived ? 'archived' : 'here'
       } catch {
@@ -171,22 +256,96 @@ async function openBoard($: any): Promise<void> {
   await refresh($, true)
 }
 
+async function listFolder($: any, path: string): Promise<any[]> {
+  try {
+    return await $.fs.list(path)
+  } catch {
+    return []
+  }
+}
+
+// Without the app: its own records on disk, a format it does not promise to keep, so a failure only shortens the list.
+async function desktopFromRecords($: any, home: string): Promise<Candidate[]> {
+  const root = `${home}/Library/Application Support/Claude/claude-code-sessions`
+  const files: { path: string; at: number }[] = []
+  for (const account of await listFolder($, root)) {
+    for (const org of await listFolder($, `${root}/${account.name}`)) {
+      for (const file of await listFolder($, `${root}/${account.name}/${org.name}`)) {
+        if (file.name.startsWith('local_') && file.name.endsWith('.json')) {
+          files.push({ path: `${root}/${account.name}/${org.name}/${file.name}`, at: file.mtimeMs })
+        }
+      }
+    }
+  }
+  const list: Candidate[] = []
+  for (const file of files.sort((a, b) => b.at - a.at)) {
+    if (list.length >= SESSIONS_SHOWN) break
+    const found = candidateFromRecord(await readJson<Record<string, unknown>>($, file.path, {}))
+    if (found) list.push(found)
+  }
+
+  return list
+}
+
+async function grep($: any, args: string[]): Promise<string> {
+  return (await $.process.run(['grep', ...args], { timeoutMs: 5000 })).stdout
+}
+
+async function cliSessions($: any, home: string): Promise<Candidate[]> {
+  const root = `${home}/.claude/projects`
+  const files: { path: string; id: string; at: number }[] = []
+  for (const folder of await listFolder($, root)) {
+    for (const file of await listFolder($, `${root}/${folder.name}`)) {
+      if (file.name.endsWith('.jsonl')) {
+        files.push({ path: `${root}/${folder.name}/${file.name}`, id: file.name.slice(0, -'.jsonl'.length), at: file.mtimeMs })
+      }
+    }
+  }
+  const list: Candidate[] = []
+  for (const file of files.sort((a, b) => b.at - a.at).slice(0, TRANSCRIPTS_SCANNED)) {
+    if (list.length >= CLI_SESSIONS_SHOWN) break
+    if (!(await grep($, ['-m1', '-o', '"entrypoint":"[^"]*"', file.path])).includes('"cli"')) continue
+    // No title means no real turn yet, as in a session opened and left: nothing to tell it by.
+    const title = titleFromTranscript(await grep($, ['-E', '"type":"(ai|custom)-title"', file.path]))
+    if (!title) continue
+    const cwd = cwdFromTranscript(await grep($, ['-m1', '-o', '"cwd":"[^"]*"', file.path]))
+    list.push({
+      localId: cliIdOf(file.id),
+      title,
+      cwd,
+      folder: folderName(cwd),
+      link: '',
+      hasReport: false,
+    })
+  }
+
+  return list
+}
+
 async function openPicker($: any): Promise<void> {
   await update($, notice, () => '')
   try {
     const home = (await $.env.get('HOME')) ?? ''
     const watched = new Set((await readWatches($)).map(one => one.localId))
-    const rows: any[] = await callApp($, 'list_sessions', { limit: 30 })
+    const fromApp = await hasApp($)
+    const desktop: Candidate[] = fromApp
+      ? (await callApp($, 'list_sessions', { limit: SESSIONS_SHOWN })).map((row: any) => ({
+          localId: row.sessionId,
+          title: row.title ?? '（未命名）',
+          folder: String(row.cwd ?? '').split('/').pop() ?? '',
+          link: row.link ?? '',
+          hasReport: false,
+        }))
+      : await desktopFromRecords($, home)
+    const found = [...(await cliSessions($, home).catch(() => [])), ...desktop]
+    // A new CLI session has no transcript yet, and it is the likeliest one to add.
+    const own = fromApp ? undefined : await ownId($)
+    const self = found.find(one => one.localId === own)
+    const all = own ? [self ?? { localId: own, title: '這個對話', folder: '', link: '', hasReport: true, cwd: await $.session.cwd() }, ...found.filter(one => one !== self)] : found
     const list: Candidate[] = []
-    for (const row of rows) {
-      if (watched.has(row.sessionId)) continue
-      list.push({
-        localId: row.sessionId,
-        title: row.title ?? '（未命名）',
-        folder: String(row.cwd ?? '').split('/').pop() ?? '',
-        link: row.link ?? '',
-        hasReport: await $.fs.exists(`${folderOf(home)}/reports/${row.sessionId}.json`),
-      })
+    for (const one of all) {
+      if (watched.has(one.localId)) continue
+      list.push({ ...one, hasReport: await $.fs.exists(`${folderOf(home)}/reports/${one.localId}.json`).catch(() => false) })
     }
     await update($, candidates, () => list)
     await update($, view, () => 'pick' as View)
@@ -208,11 +367,38 @@ async function saveWatch($: any): Promise<void> {
   if (list.some(one => one.localId === form.localId)) {
     await writeWatches($, list.map(one => (one.localId === form.localId ? { ...one, title, description } : one)))
   } else {
-    await writeWatches($, [...list, { localId: form.localId, link: form.link, title, description, addedAt: await $.clock.now() }])
+    await writeWatches($, [...list, { localId: form.localId, link: form.link, title, description, addedAt: await $.clock.now(), ...(form.cwd ? { cwd: form.cwd } : {}) }])
   }
   await update($, notice, () => '')
   await update($, view, () => 'board' as View)
   await refresh($, true)
+}
+
+async function isRunning($: any, pid: number): Promise<boolean> {
+  return (await $.process.run(['ps', '-o', 'command=', '-p', String(pid)], { timeoutMs: 5000 })).stdout.includes('claude')
+}
+
+async function openCard($: any, card: Card): Promise<void> {
+  await update($, notice, () => '')
+  if (card.link) {
+    await $.process.run(['open', card.link], { timeoutMs: 5000 })
+
+    return
+  }
+  const home = (await $.env.get('HOME')) ?? ''
+  const where = (await readJson<Report | undefined>($, `${folderOf(home)}/reports/${card.localId}.json`, undefined))?.terminal
+  const plan = openPlan(card.localId, where, where ? await isRunning($, where.pid) : false, card.cwd)
+  const fallback = resumeCommand(card.localId)
+  if (plan.kind === 'focus' || plan.kind === 'resume') {
+    const script = plan.kind === 'focus' ? FOCUS_SCRIPTS[plan.app] : RESUME_SCRIPTS[plan.app]
+    const got = await $.process.run(['osascript', '-e', script, plan.kind === 'focus' ? plan.tty : plan.command], { timeoutMs: 10000 })
+    if (got.exitCode !== 0) await update($, notice, () => `開不了終端機，請確認系統允許自動操作，或自己執行：${fallback}`)
+    else if (plan.kind === 'focus' && !got.stdout.includes('found')) await update($, notice, () => '找不到這個對話的終端機視窗。')
+  } else if (plan.kind === 'elsewhere') {
+    await update($, notice, () => `這個對話開在 ${plan.app || '其他終端機'}，無法自動跳轉，請自己切過去。`)
+  } else {
+    await update($, notice, () => `不知道這個對話的資料夾，請到原本的資料夾執行：${fallback}`)
+  }
 }
 
 async function changeWatch($: any, change: (list: Watch[]) => Watch[]): Promise<void> {
@@ -228,6 +414,9 @@ async function pickFromMenu($: any, picked: string): Promise<void> {
 
 async function drawBoard($: any, e: any): Promise<any> {
   const { Box, Text, Button, Input, Client, Svg } = $.ui.resolve(e)
+  const isTerminal = e.surface === 'terminal'
+  // The terminal has whole cells only: 1% would round to no bar at all.
+  const barWidth = isTerminal ? 1 : '1%'
   const mode = await read($, view)
   const message = await read($, notice)
   const shown = message ? <Text color="red">{message}</Text> : null
@@ -251,11 +440,11 @@ async function drawBoard($: any, e: any): Promise<any> {
           <Button
             key={`pick-${one.localId}`}
             onPress={() => {
-              void update($, draft, () => ({ localId: one.localId, link: one.link, title: one.title, description: '', isEditing: false }))
+              void update($, draft, () => ({ localId: one.localId, link: one.link, title: one.title, description: '', isEditing: false, cwd: one.cwd }))
               void update($, view, () => 'form' as View)
             }}
           >
-            {one.title} <Text dimColor>{one.folder}{one.hasReport ? '' : '・未連線'}</Text>
+            {one.title} <Text dimColor>{one.folder}{resumeCommand(one.localId) ? '・CLI' : ''}{one.hasReport ? '' : '・未連線'}</Text>
           </Button>
         ))}
       </Box>
@@ -331,7 +520,7 @@ async function drawBoard($: any, e: any): Promise<any> {
       <Box flexDirection="column" marginTop={1} marginLeft={1}>
         <Text size="footnote" dimColor>{`子代理 ${helpers.length} 個執行中`}</Text>
         <Box position="relative" flexDirection="column" paddingLeft={2}>
-          <Box position="absolute" top={0} bottom={0} left={0} width="1%" backgroundColor="#4a4a4a" />
+          <Box position="absolute" top={0} bottom={0} left={0} width={barWidth} backgroundColor="#4a4a4a" />
           {helpers.slice(0, HELPERS_SHOWN).map(helper => (
             <Text key={`helper-${helper.id}`} size="footnote">
               {helper.activity ? `${helper.description}：${helper.activity}` : helper.description}
@@ -349,7 +538,7 @@ async function drawBoard($: any, e: any): Promise<any> {
       <Box flexDirection="row" justifyContent="space-between" alignItems="center">
         <Text dimColor>{list.filter(card => card.status === 'calling').length} 個找你・共 {list.length} 個</Text>
         <Box position="relative">
-          {Svg ? (
+          {!isTerminal ? (
             <>
               <Svg source={MENU_ICON} alt="選單" width={34} height={28} />
               {/* Laid over the drawing: an Svg takes no press, a Client takes no Svg. */}
@@ -380,16 +569,18 @@ async function drawBoard($: any, e: any): Promise<any> {
           {(card.activity !== '' || card.sentence !== '' || card.status === 'offline') && (
             <Box position="relative" flexDirection="column" marginTop={1} marginLeft={1} paddingLeft={2}>
               {/* A Box has no left-only border, so the quote bar is drawn; it spans every wrapped line, unlike a │ in the text. */}
-              <Box position="absolute" top={0} bottom={0} left={0} width="1%" backgroundColor="#4a4a4a" />
+              <Box position="absolute" top={0} bottom={0} left={0} width={barWidth} backgroundColor="#4a4a4a" />
               {card.activity !== '' && <Text size="footnote">{card.activity}</Text>}
               {card.sentence !== '' && <Text size="footnote">{card.sentence}</Text>}
               {card.status === 'offline' && <Text size="footnote" dimColor>重開這個對話後才會回報。</Text>}
             </Box>
           )}
           {drawHelpers(card.helpers)}
-          <Box flexDirection="row" gap={1} marginTop={1}>
-            {card.link !== '' && card.presence !== 'deleted' && (
-              <Button key={`open-${card.localId}`} onPress={() => void $.process.run(['open', card.link], { timeoutMs: 5000 })}>
+          {/* The time floats like the status label: the desktop did not draw it as the second item of this row. */}
+          <Box position="relative" flexDirection="column" minHeight={1} marginTop={1}>
+            <Box flexDirection="row" gap={1}>
+            {(card.link !== '' || resumeCommand(card.localId)) && card.presence !== 'deleted' && (
+              <Button key={`open-${card.localId}`} onPress={() => void openCard($, card)}>
                 開啟對話
               </Button>
             )}
@@ -406,6 +597,12 @@ async function drawBoard($: any, e: any): Promise<any> {
                 知道了
               </Button>
             )}
+            </Box>
+            {card.updatedAt !== undefined && (
+              <Box position="absolute" bottom={0} right={0}>
+                <Text size="footnote" dimColor>{updatedLabel(card.updatedAt, Date.now())}</Text>
+              </Box>
+            )}
           </Box>
         </Box>
       ))}
@@ -415,17 +612,21 @@ async function drawBoard($: any, e: any): Promise<any> {
           position="absolute"
           top={2}
           right={0}
-          width={8}
+          width={isTerminal ? 12 : 8}
           flexDirection="column"
           alignItems="stretch"
-          gap={1}
-          padding={1}
+          gap={isTerminal ? 0 : 1}
+          padding={isTerminal ? 0 : 1}
           borderStyle="round"
           backgroundColor="#262626" // No theme key for a panel's background: tuned for the dark theme.
         >
-          {MENU.map(item => (
-            <Client key={`menu-${item.action}`} module="./menu-row.tsx" width="100%" props={{ label: item.label }} />
-          ))}
+          {MENU.map(item =>
+            isTerminal ? (
+              <Button key={`menu-${item.action}`} label={item.label} onPress={() => void pickFromMenu($, item.action)} />
+            ) : (
+              <Client key={`menu-${item.action}`} module="./menu-row.tsx" width="100%" props={{ label: item.label }} />
+            ),
+          )}
         </Box>
       )}
     </Box>
@@ -442,12 +643,20 @@ export const register: Register = on => {
       const home = (await $.env.get('HOME')) ?? ''
       const old = await readJson<Report | undefined>($, `${folderOf(home)}/reports/${id}.json`, undefined)
       current = old
-      await report($, { ...(old?.phase === 'working' ? { phase: 'ended', activity: '' } : {}), helpers: [] })
+      // A reload is not news: only a session found stuck working gets a new time.
+      await report($, old?.phase === 'working' ? { phase: 'ended', activity: '', helpers: [] } : { at: old?.at, helpers: [] })
       helpersChanged = true
     }
-    if ((await $.session.surfaces()).includes('desktop')) goLive($)
+    if ((await $.session.surfaces()).length > 0) goLive($)
 
     return answer
+  })
+
+  // Quitting mid-turn would otherwise leave the card working forever.
+  on('session.end', async ($, e, next) => {
+    if (current?.phase === 'working') await report($, { phase: 'ended', activity: '', helpers: [] })
+
+    return next(e)
   })
 
   on('command.run', { command: 'board' }, async $ => {
@@ -487,7 +696,7 @@ export const register: Register = on => {
     const thisTurn = e.turnId
     void (async () => {
       if (e.isAborted) {
-        await report($, { phase: 'ended', activity: '', endedAt, kind: 'none', sentence: '老大，這輪被中斷了，不用處理。' })
+        await report($, { phase: 'ended', activity: '', endedAt, kind: 'none', sentence: '這輪被中斷了，不用處理。' })
 
         return
       }
@@ -497,7 +706,7 @@ export const register: Register = on => {
         return
       }
       await report($, { phase: 'working', activity: '正在整理回報' })
-      const said = await summarize($, e.answer)
+      const said = await summarize($, e.answer, endedAt % BOSS_EVERY === 0)
       // The person may have started another turn while the sentence was being written.
       if (!turn || turn === thisTurn) await report($, { phase: 'ended', activity: '', endedAt, ...said })
     })().catch(() => undefined)
