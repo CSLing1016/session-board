@@ -4,6 +4,17 @@ A Claude Code mod: a side-pane dashboard for the sessions you choose to watch. T
 
 Claude Code 的對話儀表板 mod，桌面版和 CLI 都能用。同時開很多對話時，不用一個一個切過去看，在側邊面板就能知道每個對話的狀態、正在做什麼，以及跑完後為什麼需要你。
 
+## 安裝
+
+需要 Claude Code。目前在 macOS 上的 v2.1.318 開發和測試。
+
+```text
+/plugin marketplace add CSLing1016/session-board
+/plugin install session-board@session-board
+```
+
+已經開著的對話要重開，才會載入這個 mod 並開始回報。
+
 ## 卡片上有什麼
 
 - 你替對話取的標題和描述
@@ -22,17 +33,6 @@ Claude Code 的對話儀表板 mod，桌面版和 CLI 都能用。同時開很�
 | 未連線 | 還沒收到回報，對話要裝了這個 mod 並重開後才會回報 |
 
 子代理不會改變卡片狀態：主對話在等你時，即使子代理還在跑，卡片仍是「找你」。
-
-## 安裝
-
-需要 Claude Code。目前在 macOS 上的 v2.1.318 開發和測試。
-
-```text
-/plugin marketplace add CSLing1016/session-board
-/plugin install session-board@session-board
-```
-
-已經開著的對話要重開，才會載入這個 mod 並開始回報。
 
 ## 使用
 
