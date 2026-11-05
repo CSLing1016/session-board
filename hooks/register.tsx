@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Candidate, Card, Draft, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
-import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, helpersOf, mainAction, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, updatedLabel } from './logic'
+import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, pickOrder, helpersOf, mainAction, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, updatedLabel } from './logic'
 
 const PLUGIN = 'session-board'
 const PANE = 'session-board'
@@ -499,7 +499,8 @@ async function drawBoard($: any, e: any): Promise<any> {
   }
 
   if (mode === 'edit' || mode === 'delete') {
-    const list = await read($, cards)
+    const currentId = (await read($, self))?.localId
+    const list = pickOrder(await read($, cards), currentId)
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -525,7 +526,7 @@ async function drawBoard($: any, e: any): Promise<any> {
               }
             }}
           >
-            {card.title}
+            {card.localId === currentId ? `${card.title}（當前對話）` : card.title}
           </Button>
         ))}
       </Box>

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Report, Watch } from '../types'
-import { FAILED_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, openPlan, parseSentence, resumeCommand, sentencePrompt, sortCards, statusOf, updatedLabel } from './logic'
+import { FAILED_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, sortCards, statusOf, updatedLabel } from './logic'
 
 const watch: Watch = { localId: 'local_a', title: 'A', description: '', link: '', addedAt: 1 }
 const ended = (kind: Report['kind'], endedAt = 10): Report => ({
@@ -122,4 +122,11 @@ test('a running CLI session is gone back to, a closed one is resumed where it ra
   expect(openPlan(id, terminal, false)).toEqual({ kind: 'resume', app: 'iTerm.app', command: "cd '/a/it'\\''s' && claude --resume abc" })
   expect(openPlan(id, undefined, false, '/b')).toEqual({ kind: 'resume', app: 'Apple_Terminal', command: "cd '/b' && claude --resume abc" })
   expect(openPlan(id, undefined, false)).toEqual({ kind: 'unknown' })
+})
+
+test('a list to pick from has the current session first, then the newest added', () => {
+  const card = (localId: string, addedAt: number) => cardOf({ ...watch, localId, addedAt }, undefined, 'here')
+  const order = pickOrder([card('old', 1), card('me', 2), card('new', 3)], 'me').map(one => one.localId)
+  expect(order).toEqual(['me', 'new', 'old'])
+  expect(pickOrder([card('old', 1), card('new', 3)]).map(one => one.localId)).toEqual(['new', 'old'])
 })

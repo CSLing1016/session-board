@@ -70,6 +70,11 @@ export function sortCards(cards: readonly Card[]): Card[] {
   return [...cards].sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || a.addedAt - b.addedAt)
 }
 
+// A list to pick from keeps still: unlike the board, it does not move with each card's status.
+export function pickOrder(cards: readonly Card[], currentId?: string): Card[] {
+  return [...cards].sort((a, b) => Number(b.localId === currentId) - Number(a.localId === currentId) || b.addedAt - a.addedAt)
+}
+
 function baseName(path: unknown): string {
   return typeof path === 'string' ? (path.split('/').pop() ?? path) : ''
 }

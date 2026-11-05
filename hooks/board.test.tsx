@@ -85,6 +85,22 @@ test('a watched current session has no way to open itself', async ($, on) => {
   await ui.unmount()
 })
 
+test('the edit list marks the current session', async ($, on) => {
+  on('state.get', (_, e) => ({
+    value:
+      e.key === 'cards'
+        ? { value: [{ ...CALLING, localId: 'local_me' }], version: 1 }
+        : e.key === 'self'
+          ? { value: ME, version: 1 }
+          : e.key === 'view'
+            ? { value: 'edit', version: 1 }
+            : { value: undefined, version: 0 },
+  }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', key: 'edit-local_me' }))?.text).toContain('（當前對話）')
+  await ui.unmount()
+})
+
 test('a card shows when it last updated', async ($, on) => {
   on('state.get', (_, e) => ({
     value: e.key === 'cards' ? { value: [{ ...CALLING, updatedAt: 1000 }], version: 1 } : { value: undefined, version: 0 },
