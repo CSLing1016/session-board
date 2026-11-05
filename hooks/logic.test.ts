@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Report, Watch } from '../types'
-import { FAILED_SENTENCE, HEARTBEAT_MS, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, groupsOf, isGroupOpen, sortCards, statusOf, togglePin, updatedLabel } from './logic'
+import { ASKING_SENTENCE, FAILED_SENTENCE, HEARTBEAT_MS, INTERRUPTED_SENTENCE, askingAt, interruptedAt, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, groupsOf, isGroupOpen, sortCards, statusOf, togglePin, updatedLabel } from './logic'
 
 const NOW = 1
 
@@ -141,8 +141,22 @@ test('a working session that stopped reporting alive is lost, and comes back wit
   expect(statusOf(working(0, 5000), watch, 1001 + LOST_AFTER_MS)).toBe('working')
 })
 
-test('a report from before heartbeats goes by its update time', () => {
-  expect(statusOf(working(1000), watch, 1001 + LOST_AFTER_MS)).toBe('lost')
+test('a session on a version without heartbeats is never called lost', () => {
+  expect(statusOf(working(1000), watch, 1e12)).toBe('working')
+})
+
+test('a turn cut short asks for the person, and 知道了 clears it', () => {
+  const cut = { ...working(1), ...interruptedAt(50) } as Report
+  expect(statusOf(cut, watch, 60)).toBe('calling')
+  expect(cardOf(watch, cut, 'here', 60).sentence).toBe(INTERRUPTED_SENTENCE)
+  expect(statusOf(cut, { ...watch, ackAt: 50 }, 60)).toBe('done')
+})
+
+test('a question to the person shows as 找你 and is never lost while it waits', () => {
+  const asking = { ...working(1), ...askingAt(50) } as Report
+  expect(statusOf(asking, watch, 1e12)).toBe('calling')
+  expect(cardOf(watch, asking, 'here', 1e12).sentence).toBe(ASKING_SENTENCE)
+  expect(needsHeartbeat(asking, 1e12)).toBe(false)
 })
 
 test('a session that is not working is never lost, however old its report', () => {

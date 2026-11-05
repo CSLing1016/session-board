@@ -43,6 +43,8 @@ export const BORDER_COLOR: Record<Status, string> = {
 }
 
 export const FAILED_SENTENCE = '這輪跑完了，但我沒能整理出摘要，老大幫忙看一下。'
+export const INTERRUPTED_SENTENCE = '這輪中途被打斷，沒有整理到結果，麻煩你看一下。'
+export const ASKING_SENTENCE = '有問題要問你，等你回答。'
 export const LOST_SENTENCE = '這個對話沒有回應，可能已經中斷了。'
 
 export const HEARTBEAT_MS = 30_000
@@ -60,9 +62,17 @@ export function resumeCommand(localId: string): string | undefined {
   return localId.startsWith(CLI_PREFIX) ? `claude --resume ${localId.slice(CLI_PREFIX.length)}` : undefined
 }
 
-// A report from before heartbeats has only its update time to go by.
 function lastSignOfLife(report: Report): number {
   return report.aliveAt ?? report.at
+}
+
+// The turn ended with its process, or looks that way: whichever, its result was never written, and that needs the person.
+export function interruptedAt(endedAt: number): Partial<Report> {
+  return { phase: 'ended', activity: '', helpers: [], endedAt, kind: 'unknown', sentence: INTERRUPTED_SENTENCE }
+}
+
+export function askingAt(endedAt: number): Partial<Report> {
+  return { phase: 'ended', activity: '', endedAt, kind: 'decide', sentence: ASKING_SENTENCE }
 }
 
 export function needsHeartbeat(report: Report | undefined, now: number): boolean {
@@ -71,7 +81,8 @@ export function needsHeartbeat(report: Report | undefined, now: number): boolean
 
 export function statusOf(report: Report | undefined, watch: Watch, now: number): Status {
   if (!report) return 'offline'
-  if (report.phase === 'working') return now - lastSignOfLife(report) > LOST_AFTER_MS ? 'lost' : 'working'
+  // No sign of life at all is a session still on a version without heartbeats: alive or not, nothing tells.
+  if (report.phase === 'working') return report.aliveAt !== undefined && now - report.aliveAt > LOST_AFTER_MS ? 'lost' : 'working'
   if (report.phase === 'idle' || !report.sentence) return 'idle'
   if (report.kind === 'none') return 'done'
 

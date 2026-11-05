@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Candidate, Card, Draft, GroupsOpen, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
-import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, groupsOf, isGroupOpen, openPlan, pickOrder, helpersOf, mainAction, needsHeartbeat, parseSentence, resumeCommand, sentencePrompt, sortCards, STATUS_NAME, titleFromTranscript, togglePin, updatedLabel } from './logic'
+import { askingAt, BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, groupsOf, isGroupOpen, openPlan, pickOrder, helpersOf, interruptedAt, mainAction, needsHeartbeat, parseSentence, resumeCommand, sentencePrompt, sortCards, STATUS_NAME, titleFromTranscript, togglePin, updatedLabel } from './logic'
 
 const PLUGIN = 'session-board'
 const PANE = 'session-board'
@@ -767,7 +767,7 @@ export const register: Register = on => {
       const old = await readJson<Report | undefined>($, `${folderOf(home)}/reports/${id}.json`, undefined)
       current = old
       // A reload is not news: only a session found stuck working gets a new time.
-      await report($, old?.phase === 'working' ? { phase: 'ended', activity: '', helpers: [] } : { at: old?.at, helpers: [] })
+      await report($, old?.phase === 'working' ? interruptedAt(await $.clock.now()) : { at: old?.at, helpers: [] })
       helpersChanged = true
     }
     if ((await $.session.surfaces()).length > 0) goLive($)
@@ -777,7 +777,7 @@ export const register: Register = on => {
 
   // Quitting mid-turn would otherwise leave the card working forever.
   on('session.end', async ($, e, next) => {
-    if (current?.phase === 'working') await report($, { phase: 'ended', activity: '', helpers: [] })
+    if (current?.phase === 'working') await report($, interruptedAt(await $.clock.now()))
 
     return next(e)
   })
@@ -805,6 +805,14 @@ export const register: Register = on => {
     // The board's own session lookups pass through here too: they are not this session working.
     if (next.origin.plugin === PLUGIN) return next(e)
     const input = e as unknown as Record<string, unknown>
+    // The tool runs until the person answers: the session is waiting for them all that time.
+    if (e.tool === 'AskUserQuestion' && !e.agentId) {
+      void report($, askingAt(await $.clock.now()))
+      const answer = await next(e)
+      void report($, { phase: 'working', activity: '正在思考...', kind: undefined, sentence: undefined })
+
+      return answer
+    }
     const said = mainAction(e.tool, input)
     if (said) void report($, { phase: 'working', activity: said })
     if (e.agentId) {
