@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Candidate, Card, Draft, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
-import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, pickOrder, helpersOf, mainAction, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, updatedLabel } from './logic'
+import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, pickOrder, helpersOf, mainAction, needsHeartbeat, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, updatedLabel } from './logic'
 
 const PLUGIN = 'session-board'
 const PANE = 'session-board'
@@ -172,6 +172,7 @@ function report($: any, change: Partial<Report>): Promise<unknown> {
       const id = await ownId($)
       if (!id) return
       const home = (await $.env.get('HOME')) ?? ''
+      const now = await $.clock.now()
       current = {
         phase: 'idle',
         activity: '',
@@ -179,7 +180,8 @@ function report($: any, change: Partial<Report>): Promise<unknown> {
         ...change,
         ...(terminal ? { terminal } : {}),
         localId: id,
-        at: change.at ?? (await $.clock.now()),
+        at: change.at ?? now,
+        aliveAt: now,
       }
       await $.fs.write(`${folderOf(home)}/reports/${id}.json`, JSON.stringify(current))
     })
@@ -230,10 +232,11 @@ async function refresh($: any, checkPresence = false): Promise<void> {
     }
     presence = found
   }
+  const now = await $.clock.now()
   const next: Card[] = []
   for (const one of watches) {
     const got = await readJson<Report | undefined>($, `${folderOf(home)}/reports/${one.localId}.json`, undefined)
-    next.push(cardOf(one, got, presence[one.localId] ?? 'here'))
+    next.push(cardOf(one, got, presence[one.localId] ?? 'here', now))
   }
   const sorted = sortCards(next)
   await update($, cards, old => (JSON.stringify(old) === JSON.stringify(sorted) ? old : sorted))
@@ -278,6 +281,8 @@ async function addSelf($: any, one: SelfInfo): Promise<void> {
 }
 
 async function tick($: any): Promise<void> {
+  // A beat keeps the card's time: being alive is not news.
+  if (needsHeartbeat(current, await $.clock.now())) await report($, { at: current?.at })
   // Running helpers are checked each tick too: that is how one that ended leaves the card.
   if (helpersChanged || current?.helpers?.length) await syncHelpers($).catch(() => undefined)
   const count = ticks++
@@ -752,6 +757,8 @@ export const register: Register = on => {
       helpersChanged = true
     } else {
       turn = e.turnId
+      // The heartbeat runs on the refresh timer: a session with no surface when it started has none yet.
+      if ((await $.session.surfaces()).length > 0) goLive($)
       void report($, { phase: 'working', activity: '正在思考...', kind: undefined, sentence: undefined })
     }
 

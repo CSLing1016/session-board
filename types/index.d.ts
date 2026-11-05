@@ -1,5 +1,5 @@
 export type Kind = 'decide' | 'review' | 'blocked' | 'none' | 'unknown'
-export type Status = 'calling' | 'working' | 'done' | 'idle' | 'offline'
+export type Status = 'calling' | 'lost' | 'working' | 'done' | 'idle' | 'offline'
 export type Presence = 'here' | 'archived' | 'deleted'
 
 // Where a CLI session runs, so a card can go back to it.
@@ -12,6 +12,8 @@ export type Helper = { id: string; description: string; activity: string }
 export type Report = {
   localId: string
   at: number
+  // The last sign of life. Kept apart from at, which the card shows as its last update.
+  aliveAt?: number
   phase: 'idle' | 'working' | 'ended'
   activity: string
   kind?: Kind

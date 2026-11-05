@@ -189,3 +189,18 @@ test('another mod in the band stays, beside the button', async ($, on) => {
   expect(await ui.find({ type: 'Button', key: 'open-board' })).toBeTruthy()
   await ui.unmount()
 })
+
+test('a lost card says the session stopped answering and still offers to open it', async ($, on) => {
+  const lost: Card = { ...CALLING, status: 'lost', sentence: '這個對話沒有回應，可能已經中斷了。' }
+  on('state.get', (_, e) => ({
+    value: e.key === 'cards' ? { value: [lost], version: 1 } : { value: undefined, version: 0 },
+  }))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect((await ui.find({ type: 'Text', text: /🔌 中斷/ }))).toBeTruthy()
+    expect((await ui.find({ type: 'Text', text: /沒有回應/ }))?.text).toBe(lost.sentence)
+    expect(await ui.find({ type: 'Button', key: 'open-local_a' })).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'ack-local_a' })).toBeFalsy()
+    await ui.unmount()
+  }
+})

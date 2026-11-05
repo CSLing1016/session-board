@@ -1,7 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Report, Watch } from '../types'
-import { FAILED_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, sortCards, statusOf, updatedLabel } from './logic'
+import { FAILED_SENTENCE, HEARTBEAT_MS, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, sortCards, statusOf, updatedLabel } from './logic'
+
+const NOW = 1
 
 const watch: Watch = { localId: 'local_a', title: 'A', description: '', link: '', addedAt: 1 }
 const ended = (kind: Report['kind'], endedAt = 10): Report => ({
@@ -9,25 +11,25 @@ const ended = (kind: Report['kind'], endedAt = 10): Report => ({
 })
 
 test('the status table', () => {
-  expect(statusOf(undefined, watch)).toBe('offline')
-  expect(statusOf({ localId: 'a', at: 1, phase: 'idle', activity: '' }, watch)).toBe('idle')
-  expect(statusOf({ localId: 'a', at: 1, phase: 'working', activity: 'x' }, watch)).toBe('working')
-  expect(statusOf({ localId: 'a', at: 1, phase: 'ended', activity: '' }, watch)).toBe('idle')
-  for (const kind of ['decide', 'review', 'blocked', 'unknown'] as const) expect(statusOf(ended(kind), watch)).toBe('calling')
-  expect(statusOf(ended('none'), watch)).toBe('done')
+  expect(statusOf(undefined, watch, NOW)).toBe('offline')
+  expect(statusOf({ localId: 'a', at: 1, phase: 'idle', activity: '' }, watch, NOW)).toBe('idle')
+  expect(statusOf({ localId: 'a', at: 1, phase: 'working', activity: 'x' }, watch, NOW)).toBe('working')
+  expect(statusOf({ localId: 'a', at: 1, phase: 'ended', activity: '' }, watch, NOW)).toBe('idle')
+  for (const kind of ['decide', 'review', 'blocked', 'unknown'] as const) expect(statusOf(ended(kind), watch, NOW)).toBe('calling')
+  expect(statusOf(ended('none'), watch, NOW)).toBe('done')
 })
 
 test('知道了 clears this turn only', () => {
   const acked = { ...watch, ackAt: 10 }
-  expect(statusOf(ended('decide', 10), acked)).toBe('done')
-  expect(statusOf(ended('decide', 11), acked)).toBe('calling')
+  expect(statusOf(ended('decide', 10), acked, NOW)).toBe('done')
+  expect(statusOf(ended('decide', 11), acked, NOW)).toBe('calling')
 })
 
 test('the sentence keeps showing on 完成, and cards sort by status', () => {
-  expect(cardOf(watch, ended('none'), 'here').sentence).toBe('好了。')
-  const a = cardOf({ ...watch, localId: 'done' }, ended('none'), 'here')
-  const b = cardOf({ ...watch, localId: 'call' }, ended('decide'), 'here')
-  const c = cardOf({ ...watch, localId: 'off' }, undefined, 'here')
+  expect(cardOf(watch, ended('none'), 'here', NOW).sentence).toBe('好了。')
+  const a = cardOf({ ...watch, localId: 'done' }, ended('none'), 'here', NOW)
+  const b = cardOf({ ...watch, localId: 'call' }, ended('decide'), 'here', NOW)
+  const c = cardOf({ ...watch, localId: 'off' }, undefined, 'here', NOW)
   expect(sortCards([c, a, b]).map(card => card.localId)).toEqual(['call', 'done', 'off'])
 })
 
@@ -68,7 +70,7 @@ test('only subagents still running are listed, each with its latest action', () 
 
 test('a running subagent leaves the card asking for the person', () => {
   const helpers = [{ id: 'a', description: '對照舊版', activity: '' }]
-  const card = cardOf(watch, { ...ended('decide'), helpers }, 'here')
+  const card = cardOf(watch, { ...ended('decide'), helpers }, 'here', NOW)
   expect(card.status).toBe('calling')
   expect(card.helpers).toEqual(helpers)
 })
@@ -110,8 +112,8 @@ test('the update time names the day only when it is not today', () => {
 })
 
 test('a card carries the time of its last report', () => {
-  expect(cardOf(watch, ended('none', 42), 'here').updatedAt).toBe(42)
-  expect(cardOf(watch, undefined, 'here').updatedAt).toBeUndefined()
+  expect(cardOf(watch, ended('none', 42), 'here', NOW).updatedAt).toBe(42)
+  expect(cardOf(watch, undefined, 'here', NOW).updatedAt).toBeUndefined()
 })
 
 test('a running CLI session is gone back to, a closed one is resumed where it ran', () => {
@@ -125,8 +127,45 @@ test('a running CLI session is gone back to, a closed one is resumed where it ra
 })
 
 test('a list to pick from has the current session first, then the newest added', () => {
-  const card = (localId: string, addedAt: number) => cardOf({ ...watch, localId, addedAt }, undefined, 'here')
+  const card = (localId: string, addedAt: number) => cardOf({ ...watch, localId, addedAt }, undefined, 'here', NOW)
   const order = pickOrder([card('old', 1), card('me', 2), card('new', 3)], 'me').map(one => one.localId)
   expect(order).toEqual(['me', 'new', 'old'])
   expect(pickOrder([card('old', 1), card('new', 3)]).map(one => one.localId)).toEqual(['new', 'old'])
+})
+
+const working = (at: number, aliveAt?: number): Report => ({ localId: 'a', at, aliveAt, phase: 'working', activity: '正在跑指令' })
+
+test('a working session that stopped reporting alive is lost, and comes back with its next beat', () => {
+  expect(statusOf(working(0, 1000), watch, 1000 + LOST_AFTER_MS)).toBe('working')
+  expect(statusOf(working(0, 1000), watch, 1001 + LOST_AFTER_MS)).toBe('lost')
+  expect(statusOf(working(0, 5000), watch, 1001 + LOST_AFTER_MS)).toBe('working')
+})
+
+test('a report from before heartbeats goes by its update time', () => {
+  expect(statusOf(working(1000), watch, 1001 + LOST_AFTER_MS)).toBe('lost')
+})
+
+test('a session that is not working is never lost, however old its report', () => {
+  expect(statusOf(ended('decide', 1), watch, 1e12)).toBe('calling')
+  expect(statusOf(ended('none', 1), watch, 1e12)).toBe('done')
+  expect(statusOf({ localId: 'a', at: 1, phase: 'idle', activity: '' }, watch, 1e12)).toBe('idle')
+})
+
+test('a lost card says so, drops what it was doing, keeps its time and sorts right after 找你', () => {
+  const helpers = [{ id: 'h', description: '查資料', activity: '' }]
+  const lost = cardOf(watch, { ...working(7, 8), helpers }, 'here', 8 + LOST_AFTER_MS + 1)
+  expect(lost.sentence).toBe(LOST_SENTENCE)
+  expect(lost.activity).toBe('')
+  expect(lost.helpers).toEqual([])
+  expect(lost.updatedAt).toBe(7)
+  const others = [cardOf(watch, working(1e12, 1e12), 'here', 1e12), cardOf(watch, ended('decide'), 'here', 1e12)]
+  expect(sortCards([{ ...lost, status: 'lost' }, ...others]).map(card => card.status)).toEqual(['calling', 'lost', 'working'])
+})
+
+test('only a working session beats, and only once the last sign of life is old enough', () => {
+  expect(needsHeartbeat(undefined, 1e12)).toBe(false)
+  expect(needsHeartbeat(ended('none', 1), 1e12)).toBe(false)
+  expect(needsHeartbeat(working(0, 1000), 999 + HEARTBEAT_MS)).toBe(false)
+  expect(needsHeartbeat(working(0, 1000), 1000 + HEARTBEAT_MS)).toBe(true)
+  expect(needsHeartbeat(working(1000), 1000 + HEARTBEAT_MS)).toBe(true)
 })

@@ -2,10 +2,11 @@ import type { AgentInfo } from 'claude-code'
 
 import type { Candidate, Card, Helper, Terminal, Kind, Presence, Report, Status, Watch } from '../types'
 
-export const ORDER: readonly Status[] = ['calling', 'working', 'done', 'idle', 'offline']
+export const ORDER: readonly Status[] = ['calling', 'lost', 'working', 'done', 'idle', 'offline']
 
 export const BADGE: Record<Status, string> = {
   calling: '🙋 找你',
+  lost: '🔌 中斷',
   working: '💻 工作中',
   done: '🎉 完成',
   idle: '💤 閒置',
@@ -15,6 +16,7 @@ export const BADGE: Record<Status, string> = {
 // Muted, for white text on the dark theme's cards; 找你 stays the strongest.
 export const BADGE_COLOR: Record<Status, string> = {
   calling: '#9c463f',
+  lost: '#8a6a2f',
   working: '#3f5f7a',
   done: '#4a6b55',
   idle: '#4a4a4a',
@@ -24,6 +26,7 @@ export const BADGE_COLOR: Record<Status, string> = {
 // Lighter than the label behind the same status: a thin line in its color would hardly show.
 export const BORDER_COLOR: Record<Status, string> = {
   calling: '#c4635a',
+  lost: '#b8923f',
   working: '#5f8bb0',
   done: '#6e9a7c',
   idle: '#6a6a6a',
@@ -31,6 +34,11 @@ export const BORDER_COLOR: Record<Status, string> = {
 }
 
 export const FAILED_SENTENCE = '這輪跑完了，但我沒能整理出摘要，老大幫忙看一下。'
+export const LOST_SENTENCE = '這個對話沒有回應，可能已經中斷了。'
+
+export const HEARTBEAT_MS = 30_000
+// Several beats: one late write, or a laptop just waking up, is not a dead session.
+export const LOST_AFTER_MS = 120_000
 
 // A session without the desktop app has no local_ id: it goes by its own, under this prefix.
 const CLI_PREFIX = 'cli_'
@@ -43,25 +51,34 @@ export function resumeCommand(localId: string): string | undefined {
   return localId.startsWith(CLI_PREFIX) ? `claude --resume ${localId.slice(CLI_PREFIX.length)}` : undefined
 }
 
-export function statusOf(report: Report | undefined, watch: Watch): Status {
+// A report from before heartbeats has only its update time to go by.
+function lastSignOfLife(report: Report): number {
+  return report.aliveAt ?? report.at
+}
+
+export function needsHeartbeat(report: Report | undefined, now: number): boolean {
+  return report?.phase === 'working' && now - lastSignOfLife(report) >= HEARTBEAT_MS
+}
+
+export function statusOf(report: Report | undefined, watch: Watch, now: number): Status {
   if (!report) return 'offline'
-  if (report.phase === 'working') return 'working'
+  if (report.phase === 'working') return now - lastSignOfLife(report) > LOST_AFTER_MS ? 'lost' : 'working'
   if (report.phase === 'idle' || !report.sentence) return 'idle'
   if (report.kind === 'none') return 'done'
 
   return (watch.ackAt ?? 0) >= (report.endedAt ?? 0) ? 'done' : 'calling'
 }
 
-export function cardOf(watch: Watch, report: Report | undefined, presence: Presence): Card {
-  const status = statusOf(report, watch)
+export function cardOf(watch: Watch, report: Report | undefined, presence: Presence, now: number): Card {
+  const status = statusOf(report, watch, now)
 
   return {
     ...watch,
     status,
     presence,
     activity: status === 'working' ? (report?.activity ?? '') : '',
-    sentence: status === 'calling' || status === 'done' ? (report?.sentence ?? '') : '',
-    helpers: report?.helpers ?? [],
+    sentence: status === 'lost' ? LOST_SENTENCE : status === 'calling' || status === 'done' ? (report?.sentence ?? '') : '',
+    helpers: status === 'lost' ? [] : (report?.helpers ?? []),
     updatedAt: report?.at,
   }
 }
