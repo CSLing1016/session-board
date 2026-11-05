@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Report, Watch } from '../types'
-import { FAILED_SENTENCE, HEARTBEAT_MS, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, sortCards, statusOf, togglePin, updatedLabel } from './logic'
+import { FAILED_SENTENCE, HEARTBEAT_MS, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, groupsOf, isGroupOpen, sortCards, statusOf, togglePin, updatedLabel } from './logic'
 
 const NOW = 1
 
@@ -175,4 +175,22 @@ test('the pin flips on the chosen session only, and keeps the rest of its watch'
   const once = togglePin([watch, other], 'local_a')
   expect(once).toEqual([{ ...watch, isPinned: true }, other])
   expect(togglePin(once, 'local_a')[0]?.isPinned).toBe(false)
+})
+
+test('within a status the latest update comes first, and a card with none comes last', () => {
+  const card = (localId: string, at?: number) => ({ ...cardOf({ ...watch, localId }, at ? ended('none', at) : undefined, 'here', NOW), status: 'done' as const })
+  expect(sortCards([card('none'), card('old', 5), card('new', 9)]).map(one => one.localId)).toEqual(['new', 'old', 'none'])
+})
+
+test('statuses that may need the person start open, and a change to one stays with it', () => {
+  expect((['calling', 'lost', 'working'] as const).every(status => isGroupOpen(status, {}))).toBe(true)
+  expect((['done', 'idle', 'offline'] as const).some(status => isGroupOpen(status, {}))).toBe(false)
+  expect(isGroupOpen('calling', { calling: false })).toBe(false)
+  expect(isGroupOpen('done', { done: true })).toBe(true)
+})
+
+test('cards group by status in the board order, and an empty status has no group', () => {
+  const card = (status: 'calling' | 'done', localId: string) => ({ ...cardOf({ ...watch, localId }, undefined, 'here', NOW), status })
+  const groups = groupsOf(sortCards([card('done', 'd'), card('calling', 'c')]))
+  expect(groups.map(group => [group.status, group.cards.map(one => one.localId)])).toEqual([['calling', ['c']], ['done', ['d']]])
 })

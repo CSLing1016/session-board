@@ -235,3 +235,29 @@ test('with nothing pinned there is no pinned section, and the current session ha
   expect(await ui.find({ type: 'Button', key: 'pin-local_a' })).toBeTruthy()
   await ui.unmount()
 })
+
+test('other sessions group by status: closed groups show their count, not their cards', async ($, on) => {
+  const done: Card = { ...CALLING, localId: 'local_d', status: 'done' }
+  on('state.get', (_, e) => ({
+    value: e.key === 'cards' ? { value: [CALLING, done], version: 1 } : { value: undefined, version: 0 },
+  }))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect((await ui.find({ type: 'Button', key: 'group-calling' }))?.text).toContain('▼ 找你 1')
+    expect((await ui.find({ type: 'Button', key: 'group-done' }))?.text).toContain('▶ 完成 1')
+    expect(await ui.find({ type: 'Button', key: 'open-local_a' })).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'open-local_d' })).toBeFalsy()
+    await ui.unmount()
+  }
+})
+
+test('a pinned card is not grouped, and shows whatever its status', async ($, on) => {
+  const pinned: Card = { ...CALLING, localId: 'local_p', status: 'done', isPinned: true }
+  on('state.get', (_, e) => ({
+    value: e.key === 'cards' ? { value: [pinned], version: 1 } : { value: undefined, version: 0 },
+  }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Button', key: 'group-done' })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'open-local_p' })).toBeTruthy()
+  await ui.unmount()
+})

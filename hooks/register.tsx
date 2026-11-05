@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Candidate, Card, Draft, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
-import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, pickOrder, helpersOf, mainAction, needsHeartbeat, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, togglePin, updatedLabel } from './logic'
+import type { Candidate, Card, Draft, GroupsOpen, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
+import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, groupsOf, isGroupOpen, openPlan, pickOrder, helpersOf, mainAction, needsHeartbeat, parseSentence, resumeCommand, sentencePrompt, sortCards, STATUS_NAME, titleFromTranscript, togglePin, updatedLabel } from './logic'
 
 const PLUGIN = 'session-board'
 const PANE = 'session-board'
@@ -84,6 +84,7 @@ const draft = atom({ plugin: 'session-board', key: 'draft' } as const, null as D
 const notice = atom({ plugin: 'session-board', key: 'notice' } as const, '')
 const isMenuOpen = atom({ plugin: 'session-board', key: 'isMenuOpen' } as const, false)
 const isPaneOpen = atom({ plugin: 'session-board', key: 'isPaneOpen' } as const, false)
+const groupsOpen = atom({ plugin: 'session-board', key: 'groupsOpen' } as const, {} as GroupsOpen)
 const self = atom({ plugin: 'session-board', key: 'self' } as const, null as SelfInfo | null)
 
 // Every session: what it says about itself.
@@ -575,6 +576,7 @@ async function drawBoard($: any, e: any): Promise<any> {
   const others = list.filter(card => card !== myCard)
   const pinned = others.filter(card => card.isPinned)
   const rest = others.filter(card => !card.isPinned)
+  const opened = (await read($, groupsOpen)) ?? {}
   const sectionLine = (name: string) => <Text dimColor wrap="truncate-end">{`${name} ${'─'.repeat(DIVIDER_LENGTH)}`}</Text>
   const currentBackground = isTerminal ? '#2c2c2c' : '#262626' // No theme key for a raised card: tuned for the dark theme.
   const badge = (status: Status) => (
@@ -705,7 +707,28 @@ async function drawBoard($: any, e: any): Promise<any> {
       {pinned.map(card => drawCard(card, false))}
       {(me || pinned.length > 0) && (rest.length > 0 || pinned.length === 0) && sectionLine('其他對話')}
       {others.length === 0 && <Text dimColor>{me ? '還沒有監控其他對話。' : '還沒有監控的對話。'}</Text>}
-      {rest.map(card => drawCard(card, false))}
+      {/* Their own column: the board's gap would leave a blank row between closed groups. */}
+      <Box flexDirection="column">
+        {groupsOf(rest).map(group => {
+          const isOpen = isGroupOpen(group.status, opened)
+
+          return (
+            <Box key={`group-box-${group.status}`} flexDirection="column">
+              <Button
+                key={`group-${group.status}`}
+                plain
+                label={`${isOpen ? '▼' : '▶'} ${STATUS_NAME[group.status]} ${group.cards.length}`}
+                onPress={() => void update($, groupsOpen, old => ({ ...old, [group.status]: !isGroupOpen(group.status, old ?? {}) }))}
+              />
+              {isOpen && (
+                <Box flexDirection="column" gap={1}>
+                  {group.cards.map(card => drawCard(card, false))}
+                </Box>
+              )}
+            </Box>
+          )
+        })}
+      </Box>
       {/* Last in the tree: an absolute Box is painted over those before it, and over nothing after it. */}
       {menuOpen && (
         <Box

@@ -44,6 +44,9 @@ export type Card = Watch & {
   updatedAt?: number
 }
 
+// Only what the person changed: a status not named here is as its default.
+export type GroupsOpen = Partial<Record<Status, boolean>>
+
 // The session the board is open in, for adding it directly.
 export type SelfInfo = { localId: string; title: string; link: string; cwd: string; isWorking: boolean }
 
@@ -61,6 +64,7 @@ declare module 'claude-code' {
       notice: string
       isMenuOpen: boolean
       isPaneOpen: boolean
+      groupsOpen: GroupsOpen
       self: SelfInfo | null
     }
   }

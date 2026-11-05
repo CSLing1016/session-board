@@ -1,16 +1,25 @@
 import type { AgentInfo } from 'claude-code'
 
-import type { Candidate, Card, Helper, Terminal, Kind, Presence, Report, Status, Watch } from '../types'
+import type { Candidate, Card, GroupsOpen, Helper, Terminal, Kind, Presence, Report, Status, Watch } from '../types'
 
 export const ORDER: readonly Status[] = ['calling', 'lost', 'working', 'done', 'idle', 'offline']
 
-export const BADGE: Record<Status, string> = {
-  calling: '🙋 找你',
-  lost: '🔌 中斷',
-  working: '💻 工作中',
-  done: '🎉 完成',
-  idle: '💤 閒置',
+export const STATUS_NAME: Record<Status, string> = {
+  calling: '找你',
+  lost: '中斷',
+  working: '工作中',
+  done: '完成',
+  idle: '閒置',
   offline: '未連線',
+}
+
+export const BADGE: Record<Status, string> = {
+  calling: `🙋 ${STATUS_NAME.calling}`,
+  lost: `🔌 ${STATUS_NAME.lost}`,
+  working: `💻 ${STATUS_NAME.working}`,
+  done: `🎉 ${STATUS_NAME.done}`,
+  idle: `💤 ${STATUS_NAME.idle}`,
+  offline: STATUS_NAME.offline,
 }
 
 // Muted, for white text on the dark theme's cards; 找你 stays the strongest.
@@ -84,7 +93,20 @@ export function cardOf(watch: Watch, report: Report | undefined, presence: Prese
 }
 
 export function sortCards(cards: readonly Card[]): Card[] {
-  return [...cards].sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || a.addedAt - b.addedAt)
+  return [...cards].sort(
+    (a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.addedAt - b.addedAt,
+  )
+}
+
+// Open by default: what may need the person, or is still moving.
+const OPEN_BY_DEFAULT: readonly Status[] = ['calling', 'lost', 'working']
+
+export function isGroupOpen(status: Status, changed: GroupsOpen): boolean {
+  return changed[status] ?? OPEN_BY_DEFAULT.includes(status)
+}
+
+export function groupsOf(cards: readonly Card[]): { status: Status; cards: Card[] }[] {
+  return ORDER.map(status => ({ status, cards: cards.filter(card => card.status === status) })).filter(group => group.cards.length > 0)
 }
 
 // A list to pick from keeps still: unlike the board, it does not move with each card's status.
