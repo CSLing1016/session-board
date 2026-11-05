@@ -27,6 +27,7 @@ const CALLING: Card = {
   sentence: '週報做好了，請你驗收。',
   presence: 'here',
   helpers: [],
+  helpersTotal: 0,
 }
 
 test('an empty board says so and offers to add, on every surface', async ($, on) => {
@@ -260,4 +261,18 @@ test('a pinned card is not grouped, and shows whatever its status', async ($, on
   expect(await ui.find({ type: 'Button', key: 'group-done' })).toBeFalsy()
   expect(await ui.find({ type: 'Button', key: 'open-local_p' })).toBeTruthy()
   await ui.unmount()
+})
+
+test('a card with subagents running shows their progress in place of its status', async ($, on) => {
+  const busy: Card = { ...CALLING, helpers: [{ id: 'h', description: '查資料', activity: '' }], helpersTotal: 2 }
+  on('state.get', (_, e) => ({
+    value: e.key === 'cards' ? { value: [busy], version: 1 } : { value: undefined, version: 0 },
+  }))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /子代理 \(1\/2\)/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /🙋 找你/ })).toBeFalsy()
+    expect(await ui.find({ type: 'Button', key: 'ack-local_a' })).toBeTruthy()
+    await ui.unmount()
+  }
 })

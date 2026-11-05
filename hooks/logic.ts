@@ -75,18 +75,26 @@ export function askingAt(endedAt: number): Partial<Report> {
   return { phase: 'ended', activity: '', endedAt, kind: 'decide', sentence: ASKING_SENTENCE }
 }
 
+// No sign of life at all is a session still on a version without heartbeats: alive or not, nothing tells.
+function isSilent(report: Report, now: number): boolean {
+  return report.aliveAt !== undefined && now - report.aliveAt > LOST_AFTER_MS
+}
+
 export function needsHeartbeat(report: Report | undefined, now: number): boolean {
-  return report?.phase === 'working' && now - lastSignOfLife(report) >= HEARTBEAT_MS
+  return !!report && (report.phase === 'working' || !!report.helpers?.length) && now - lastSignOfLife(report) >= HEARTBEAT_MS
 }
 
 export function statusOf(report: Report | undefined, watch: Watch, now: number): Status {
   if (!report) return 'offline'
-  // No sign of life at all is a session still on a version without heartbeats: alive or not, nothing tells.
-  if (report.phase === 'working') return report.aliveAt !== undefined && now - report.aliveAt > LOST_AFTER_MS ? 'lost' : 'working'
+  const movingStatus = isSilent(report, now) ? 'lost' : 'working'
+  if (report.phase === 'working') return movingStatus
+  const isWaiting = report.phase === 'ended' && !!report.sentence && report.kind !== 'none' && (watch.ackAt ?? 0) < (report.endedAt ?? 0)
+  if (isWaiting) return 'calling'
+  // While subagents run, the session is not done or idle: its card stays where it can be seen.
+  if (report.helpers?.length) return movingStatus
   if (report.phase === 'idle' || !report.sentence) return 'idle'
-  if (report.kind === 'none') return 'done'
 
-  return (watch.ackAt ?? 0) >= (report.endedAt ?? 0) ? 'done' : 'calling'
+  return 'done'
 }
 
 export function cardOf(watch: Watch, report: Report | undefined, presence: Presence, now: number): Card {
@@ -98,7 +106,9 @@ export function cardOf(watch: Watch, report: Report | undefined, presence: Prese
     presence,
     activity: status === 'working' ? (report?.activity ?? '') : '',
     sentence: status === 'lost' ? LOST_SENTENCE : status === 'calling' || status === 'done' ? (report?.sentence ?? '') : '',
-    helpers: status === 'lost' ? [] : (report?.helpers ?? []),
+    // Subagents die with their session, whatever the card still says of it.
+    helpers: report && isSilent(report, now) ? [] : (report?.helpers ?? []),
+    helpersTotal: report?.helpersTotal ?? 0,
     updatedAt: report?.at,
   }
 }
@@ -216,8 +226,31 @@ export function helpersOf(
   actions: ReadonlyMap<string, string>,
 ): Helper[] {
   return agents
-    .filter(agent => agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting')
+    .filter(isHelperRunning)
     .map(agent => ({ id: agent.id, description: agent.description, activity: actions.get(agent.id) ?? '' }))
+}
+
+function isHelperRunning(agent: Pick<AgentInfo, 'status'>): boolean {
+  return agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting'
+}
+
+// A round starts with a turn when no subagent runs. One that finishes starts a turn itself, and that must not reset the count.
+export function nextRoundBaseline(agents: readonly Pick<AgentInfo, 'id' | 'status'>[], baseline: ReadonlySet<string>): ReadonlySet<string> {
+  return agents.some(isHelperRunning) ? baseline : new Set(agents.map(agent => agent.id))
+}
+
+// Kept, not recounted: a finished subagent can drop off the list, and the count must not go backwards.
+export function roundMembers(agents: readonly Pick<AgentInfo, 'id'>[], baseline: ReadonlySet<string>, members: ReadonlySet<string>): Set<string> {
+  return new Set([...members, ...agents.filter(agent => !baseline.has(agent.id)).map(agent => agent.id)])
+}
+
+// The label stays the status's color either way: with subagents running that color is all that shows the status.
+export function badgeLabel(card: Pick<Card, 'status' | 'helpers' | 'helpersTotal'>): string {
+  const running = card.helpers.length
+  if (running === 0) return BADGE[card.status]
+  const total = Math.max(card.helpersTotal, running)
+
+  return `子代理 (${total - running}/${total})`
 }
 
 export function folderName(cwd: unknown): string {

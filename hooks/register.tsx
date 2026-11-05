@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Candidate, Card, Draft, GroupsOpen, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
-import { askingAt, BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, groupsOf, isGroupOpen, openPlan, pickOrder, helpersOf, interruptedAt, mainAction, needsHeartbeat, parseSentence, resumeCommand, sentencePrompt, sortCards, STATUS_NAME, titleFromTranscript, togglePin, updatedLabel } from './logic'
+import { askingAt, BADGE, BADGE_COLOR, badgeLabel, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, groupsOf, isGroupOpen, openPlan, pickOrder, helpersOf, interruptedAt, mainAction, needsHeartbeat, nextRoundBaseline, parseSentence, resumeCommand, roundMembers, sentencePrompt, sortCards, STATUS_NAME, titleFromTranscript, togglePin, updatedLabel } from './logic'
 
 const PLUGIN = 'session-board'
 const PANE = 'session-board'
@@ -24,6 +24,8 @@ const DIVIDER_LENGTH = 200 // Wider than any pane: the Text cuts it to fit.
 const BAR_ROWS = 40 // More than any card's text wraps to.
 // The pin floats like the status label, over room the title's padding keeps free.
 const PIN_ROOM = { terminal: 5, desktop: 5 }
+const BADGE_ROOM = 13 // Free for the status label, which floats over it.
+const BADGE_ROOM_LONG = 17 // Room for 子代理 (10/12).
 const BOSS_EVERY = 3 // about one sentence in three says 老大
 const SESSIONS_SHOWN = 30
 const CLI_SESSIONS_SHOWN = 15
@@ -96,6 +98,8 @@ let terminal: Terminal | undefined
 let selfNames: Omit<SelfInfo, 'isWorking'> | undefined
 const helperActions = new Map<string, string>()
 let helpersChanged = false
+let roundBaseline: ReadonlySet<string> = new Set()
+let roundHelpers: ReadonlySet<string> = new Set()
 
 // The board's session: what it remembers between refreshes.
 let timer: { cancel: () => void } | undefined
@@ -196,8 +200,11 @@ function report($: any, change: Partial<Report>): Promise<unknown> {
 // Subagents call tools too often to write on each call: the refresh tick writes what changed.
 async function syncHelpers($: any): Promise<void> {
   helpersChanged = false
-  const helpers = helpersOf(await $.agent.list(), helperActions)
-  if (JSON.stringify(helpers) !== JSON.stringify(current?.helpers ?? [])) await report($, { helpers })
+  const agents = await $.agent.list()
+  const helpers = helpersOf(agents, helperActions)
+  roundHelpers = roundMembers(agents, roundBaseline, roundHelpers)
+  const helpersTotal = roundHelpers.size
+  if (JSON.stringify(helpers) !== JSON.stringify(current?.helpers ?? []) || helpersTotal !== (current?.helpersTotal ?? 0)) await report($, { helpers, helpersTotal })
 }
 
 async function isWatched($: any): Promise<boolean> {
@@ -579,10 +586,10 @@ async function drawBoard($: any, e: any): Promise<any> {
   const opened = (await read($, groupsOpen)) ?? {}
   const sectionLine = (name: string) => <Text dimColor wrap="truncate-end">{`${name} ${'─'.repeat(DIVIDER_LENGTH)}`}</Text>
   const currentBackground = isTerminal ? '#2c2c2c' : '#262626' // No theme key for a raised card: tuned for the dark theme.
-  const badge = (status: Status) => (
+  const badge = (status: Status, label: string = BADGE[status]) => (
     <Box position="absolute" top={0} right={0}>
       <Text bold color="#ffffff" backgroundColor={BADGE_COLOR[status]}>
-        {` ${BADGE[status]} `}
+        {` ${label} `}
       </Text>
     </Box>
   )
@@ -607,7 +614,7 @@ async function drawBoard($: any, e: any): Promise<any> {
   const drawCard = (card: Card, isCurrent: boolean) => (
         <Box key={`card-${card.localId}`} flexDirection="column" borderStyle="round" borderColor={BORDER_COLOR[card.status]} backgroundColor={isCurrent ? currentBackground : undefined} paddingX={1}>
           {/* The label floats over room the padding keeps free: a shrinking row Box clips its Text on the desktop instead of wrapping it. */}
-          <Box position="relative" flexDirection="column" paddingRight={13} paddingLeft={isCurrent ? 0 : PIN_ROOM[isTerminal ? 'terminal' : 'desktop']}>
+          <Box position="relative" flexDirection="column" paddingRight={card.helpers.length > 0 ? BADGE_ROOM_LONG : BADGE_ROOM} paddingLeft={isCurrent ? 0 : PIN_ROOM[isTerminal ? 'terminal' : 'desktop']}>
             {!isCurrent && (
               <Box position="absolute" top={0} left={0}>
                 {/* The terminal's own [ label ] pads the icon: plain draws the brackets as written. A desktop's button has its own frame. */}
@@ -616,7 +623,7 @@ async function drawBoard($: any, e: any): Promise<any> {
             )}
             {/* One string: a long sentence wraps on the desktop, and this title, split in two children, did not. */}
             <Text bold>{`${card.title}${card.presence === 'archived' ? '（已封存）' : card.presence === 'deleted' ? '（已刪除）' : ''}`}</Text>
-            {badge(card.status)}
+            {badge(card.status, badgeLabel(card))}
           </Box>
           {card.description !== '' && <Text dimColor>{card.description}</Text>}
           {(card.activity !== '' || card.sentence !== '' || card.status === 'offline') && (
@@ -679,11 +686,14 @@ async function drawBoard($: any, e: any): Promise<any> {
         </Box>
       </Box>
       {shown}
-      {me && <Text size="footnote" dimColor>當前對話</Text>}
-      {myCard && drawCard(myCard, true)}
-      {me && !myCard && (
+      {/* Each section its own column: the board's gap would leave a blank row under its name. */}
+      {me && (
+        <Box flexDirection="column">
+          <Text size="footnote" dimColor>當前對話</Text>
+          {myCard && drawCard(myCard, true)}
+          {!myCard && (
         <Box key="current-unwatched" flexDirection="column" borderStyle="round" borderColor={BORDER_COLOR[me.isWorking ? 'working' : 'idle']} backgroundColor={currentBackground} paddingX={1}>
-          <Box position="relative" flexDirection="column" paddingRight={13}>
+          <Box position="relative" flexDirection="column" paddingRight={BADGE_ROOM}>
             <Text bold>{me.title}</Text>
             {badge(me.isWorking ? 'working' : 'idle')}
           </Box>
@@ -701,14 +711,22 @@ async function drawBoard($: any, e: any): Promise<any> {
             </Button>
           </Box>
         </Box>
+          )}
+        </Box>
       )}
       {/* Cut to one row by the Text: a Box's own line would be a whole cell thick on the terminal. */}
-      {pinned.length > 0 && sectionLine('置頂對話')}
-      {pinned.map(card => drawCard(card, false))}
-      {(me || pinned.length > 0) && (rest.length > 0 || pinned.length === 0) && sectionLine('其他對話')}
-      {others.length === 0 && <Text dimColor>{me ? '還沒有監控其他對話。' : '還沒有監控的對話。'}</Text>}
+      {pinned.length > 0 && (
+        <Box flexDirection="column">
+          {sectionLine('置頂對話')}
+          <Box flexDirection="column" gap={1}>
+            {pinned.map(card => drawCard(card, false))}
+          </Box>
+        </Box>
+      )}
       {/* Their own column: the board's gap would leave a blank row between closed groups. */}
       <Box flexDirection="column">
+        {(me || pinned.length > 0) && (rest.length > 0 || pinned.length === 0) && sectionLine('其他對話')}
+        {others.length === 0 && <Text dimColor>{me ? '還沒有監控其他對話。' : '還沒有監控的對話。'}</Text>}
         {groupsOf(rest).map(group => {
           const isOpen = isGroupOpen(group.status, opened)
 
@@ -793,6 +811,10 @@ export const register: Register = on => {
       helpersChanged = true
     } else {
       turn = e.turnId
+      const baseline = nextRoundBaseline(await $.agent.list(), roundBaseline)
+      if (baseline !== roundBaseline) roundHelpers = new Set()
+      roundBaseline = baseline
+      helpersChanged = true
       // The heartbeat runs on the refresh timer: a session with no surface when it started has none yet.
       if ((await $.session.surfaces()).length > 0) goLive($)
       void report($, { phase: 'working', activity: '正在思考...', kind: undefined, sentence: undefined })

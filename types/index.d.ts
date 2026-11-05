@@ -20,6 +20,8 @@ export type Report = {
   sentence?: string
   endedAt?: number
   helpers?: Helper[]
+  // Every subagent of this round, those that finished included.
+  helpersTotal?: number
   terminal?: Terminal
 }
 
@@ -41,6 +43,7 @@ export type Card = Watch & {
   sentence: string
   presence: Presence
   helpers: Helper[]
+  helpersTotal: number
   updatedAt?: number
 }
 

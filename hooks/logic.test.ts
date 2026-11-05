@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Report, Watch } from '../types'
-import { ASKING_SENTENCE, FAILED_SENTENCE, HEARTBEAT_MS, INTERRUPTED_SENTENCE, askingAt, interruptedAt, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, groupsOf, isGroupOpen, sortCards, statusOf, togglePin, updatedLabel } from './logic'
+import { badgeLabel, nextRoundBaseline, roundMembers, ASKING_SENTENCE, FAILED_SENTENCE, HEARTBEAT_MS, INTERRUPTED_SENTENCE, askingAt, interruptedAt, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, groupsOf, isGroupOpen, sortCards, statusOf, togglePin, updatedLabel } from './logic'
 
 const NOW = 1
 
@@ -207,4 +207,48 @@ test('cards group by status in the board order, and an empty status has no group
   const card = (status: 'calling' | 'done', localId: string) => ({ ...cardOf({ ...watch, localId }, undefined, 'here', NOW), status })
   const groups = groupsOf(sortCards([card('done', 'd'), card('calling', 'c')]))
   expect(groups.map(group => [group.status, group.cards.map(one => one.localId)])).toEqual([['calling', ['c']], ['done', ['d']]])
+})
+
+test('the label counts this round\'s subagents, and goes back to the status when none run', () => {
+  const helper = (id: string) => ({ id, description: '', activity: '' })
+  expect(badgeLabel({ status: 'working', helpers: [helper('a'), helper('b'), helper('c')], helpersTotal: 5 })).toBe('子代理 (2/5)')
+  expect(badgeLabel({ status: 'calling', helpers: [helper('a')], helpersTotal: 2 })).toBe('子代理 (1/2)')
+  expect(badgeLabel({ status: 'calling', helpers: [], helpersTotal: 2 })).toBe('🙋 找你')
+  expect(badgeLabel({ status: 'working', helpers: [helper('a')], helpersTotal: 0 })).toBe('子代理 (0/1)')
+})
+
+test('a round counts from zero only when no subagent runs, and one finishing does not reset it', () => {
+  const first = nextRoundBaseline([{ id: 'old', status: 'completed' }], new Set())
+  const round = [{ id: 'old', status: 'completed' as const }, { id: 'a', status: 'completed' as const }, { id: 'b', status: 'running' as const }]
+  expect(nextRoundBaseline(round, first)).toBe(first)
+  const done = round.map(agent => ({ ...agent, status: 'completed' as const }))
+  expect(nextRoundBaseline(done, first)).not.toBe(first)
+  expect(roundMembers(done, nextRoundBaseline(done, first), new Set()).size).toBe(0)
+})
+
+test('the count keeps a finished subagent that dropped off the list', () => {
+  const baseline = new Set(['old'])
+  const three = roundMembers([{ id: 'old' }, { id: 'a' }, { id: 'b' }, { id: 'c' }], baseline, new Set())
+  expect(three.size).toBe(3)
+  expect(roundMembers([{ id: 'old' }, { id: 'c' }], baseline, three).size).toBe(3)
+})
+
+test('while subagents run a card is only 找你 or 工作中, and they keep the session beating', () => {
+  const helpers = [{ id: 'h', description: '查資料', activity: '' }]
+  const alive = { aliveAt: 100 }
+  expect(statusOf({ ...ended('none', 50), ...alive, helpers }, watch, 100)).toBe('working')
+  expect(statusOf({ localId: 'a', at: 1, ...alive, phase: 'idle', activity: '', helpers }, watch, 100)).toBe('working')
+  expect(statusOf({ ...ended('decide', 50), ...alive, helpers }, watch, 100)).toBe('calling')
+  expect(statusOf({ ...ended('decide', 50), ...alive, helpers }, { ...watch, ackAt: 50 }, 100)).toBe('working')
+  expect(needsHeartbeat({ ...ended('none', 50), ...alive, helpers }, 100 + HEARTBEAT_MS)).toBe(true)
+})
+
+test('subagents of a session gone silent leave the card: a calling one stays calling, others are lost', () => {
+  const helpers = [{ id: 'h', description: '查資料', activity: '' }]
+  const later = 100 + LOST_AFTER_MS + 1
+  const calling = cardOf(watch, { ...ended('decide', 50), aliveAt: 100, helpers }, 'here', later)
+  expect([calling.status, calling.helpers]).toEqual(['calling', []])
+  const quiet = cardOf(watch, { ...ended('none', 50), aliveAt: 100, helpers }, 'here', later)
+  expect([quiet.status, quiet.helpers]).toEqual(['lost', []])
+  expect(statusOf(ended('none', 50), watch, later)).toBe('done')
 })
