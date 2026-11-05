@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Report, Watch } from '../types'
-import { FAILED_SENTENCE, HEARTBEAT_MS, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, sortCards, statusOf, updatedLabel } from './logic'
+import { FAILED_SENTENCE, HEARTBEAT_MS, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, sortCards, statusOf, togglePin, updatedLabel } from './logic'
 
 const NOW = 1
 
@@ -168,4 +168,11 @@ test('only a working session beats, and only once the last sign of life is old e
   expect(needsHeartbeat(working(0, 1000), 999 + HEARTBEAT_MS)).toBe(false)
   expect(needsHeartbeat(working(0, 1000), 1000 + HEARTBEAT_MS)).toBe(true)
   expect(needsHeartbeat(working(1000), 1000 + HEARTBEAT_MS)).toBe(true)
+})
+
+test('the pin flips on the chosen session only, and keeps the rest of its watch', () => {
+  const other = { ...watch, localId: 'local_b' }
+  const once = togglePin([watch, other], 'local_a')
+  expect(once).toEqual([{ ...watch, isPinned: true }, other])
+  expect(togglePin(once, 'local_a')[0]?.isPinned).toBe(false)
 })

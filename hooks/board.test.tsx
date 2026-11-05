@@ -204,3 +204,34 @@ test('a lost card says the session stopped answering and still offers to open it
     await ui.unmount()
   }
 })
+
+test('pinned sessions get a section of their own above the others', async ($, on) => {
+  const pinned: Card = { ...CALLING, localId: 'local_p', title: '置頂的', isPinned: true }
+  on('state.get', (_, e) => ({
+    value: e.key === 'cards' ? { value: [pinned, CALLING], version: 1 } : { value: undefined, version: 0 },
+  }))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /置頂對話/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Text', text: /其他對話/ })).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'pin-local_p' })).toBeTruthy()
+    expect(await ui.find({ type: 'Button', key: 'pin-local_a' })).toBeTruthy()
+    await ui.unmount()
+  }
+})
+
+test('with nothing pinned there is no pinned section, and the current session has no pin', async ($, on) => {
+  on('state.get', (_, e) => ({
+    value:
+      e.key === 'cards'
+        ? { value: [{ ...CALLING, localId: 'local_me' }, CALLING], version: 1 }
+        : e.key === 'self'
+          ? { value: ME, version: 1 }
+          : { value: undefined, version: 0 },
+  }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /置頂對話/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'pin-local_me' })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'pin-local_a' })).toBeTruthy()
+  await ui.unmount()
+})

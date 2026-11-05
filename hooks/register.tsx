@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Candidate, Card, Draft, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
-import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, pickOrder, helpersOf, mainAction, needsHeartbeat, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, updatedLabel } from './logic'
+import { BADGE, BADGE_COLOR, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, openPlan, pickOrder, helpersOf, mainAction, needsHeartbeat, parseSentence, resumeCommand, sentencePrompt, sortCards, titleFromTranscript, togglePin, updatedLabel } from './logic'
 
 const PLUGIN = 'session-board'
 const PANE = 'session-board'
@@ -22,6 +22,8 @@ const BAND_EVERY = 4 // ticks: only the band's count is needed while the pane is
 const HELPERS_SHOWN = 3
 const DIVIDER_LENGTH = 200 // Wider than any pane: the Text cuts it to fit.
 const BAR_ROWS = 40 // More than any card's text wraps to.
+// The pin floats like the status label, over room the title's padding keeps free.
+const PIN_ROOM = { terminal: 5, desktop: 5 }
 const BOSS_EVERY = 3 // about one sentence in three says 老大
 const SESSIONS_SHOWN = 30
 const CLI_SESSIONS_SHOWN = 15
@@ -571,6 +573,9 @@ async function drawBoard($: any, e: any): Promise<any> {
   const me = await read($, self)
   const myCard = me ? list.find(card => card.localId === me.localId) : undefined
   const others = list.filter(card => card !== myCard)
+  const pinned = others.filter(card => card.isPinned)
+  const rest = others.filter(card => !card.isPinned)
+  const sectionLine = (name: string) => <Text dimColor wrap="truncate-end">{`${name} ${'─'.repeat(DIVIDER_LENGTH)}`}</Text>
   const currentBackground = isTerminal ? '#2c2c2c' : '#262626' // No theme key for a raised card: tuned for the dark theme.
   const badge = (status: Status) => (
     <Box position="absolute" top={0} right={0}>
@@ -600,7 +605,13 @@ async function drawBoard($: any, e: any): Promise<any> {
   const drawCard = (card: Card, isCurrent: boolean) => (
         <Box key={`card-${card.localId}`} flexDirection="column" borderStyle="round" borderColor={BORDER_COLOR[card.status]} backgroundColor={isCurrent ? currentBackground : undefined} paddingX={1}>
           {/* The label floats over room the padding keeps free: a shrinking row Box clips its Text on the desktop instead of wrapping it. */}
-          <Box position="relative" flexDirection="column" paddingRight={13}>
+          <Box position="relative" flexDirection="column" paddingRight={13} paddingLeft={isCurrent ? 0 : PIN_ROOM[isTerminal ? 'terminal' : 'desktop']}>
+            {!isCurrent && (
+              <Box position="absolute" top={0} left={0}>
+                {/* The terminal's own [ label ] pads the icon: plain draws the brackets as written. A desktop's button has its own frame. */}
+                <Button key={`pin-${card.localId}`} {...(isTerminal ? { plain: true as const, label: '[📌]' } : { label: '📌' })} onPress={() => void changeWatch($, watches => togglePin(watches, card.localId))} />
+              </Box>
+            )}
             {/* One string: a long sentence wraps on the desktop, and this title, split in two children, did not. */}
             <Text bold>{`${card.title}${card.presence === 'archived' ? '（已封存）' : card.presence === 'deleted' ? '（已刪除）' : ''}`}</Text>
             {badge(card.status)}
@@ -690,9 +701,11 @@ async function drawBoard($: any, e: any): Promise<any> {
         </Box>
       )}
       {/* Cut to one row by the Text: a Box's own line would be a whole cell thick on the terminal. */}
-      {me && <Text dimColor wrap="truncate-end">{`其他對話 ${'─'.repeat(DIVIDER_LENGTH)}`}</Text>}
+      {pinned.length > 0 && sectionLine('置頂對話')}
+      {pinned.map(card => drawCard(card, false))}
+      {(me || pinned.length > 0) && (rest.length > 0 || pinned.length === 0) && sectionLine('其他對話')}
       {others.length === 0 && <Text dimColor>{me ? '還沒有監控其他對話。' : '還沒有監控的對話。'}</Text>}
-      {others.map(card => drawCard(card, false))}
+      {rest.map(card => drawCard(card, false))}
       {/* Last in the tree: an absolute Box is painted over those before it, and over nothing after it. */}
       {menuOpen && (
         <Box

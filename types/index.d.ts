@@ -32,6 +32,7 @@ export type Watch = {
   addedAt: number
   ackAt?: number
   cwd?: string
+  isPinned?: boolean
 }
 
 export type Card = Watch & {

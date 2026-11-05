@@ -92,6 +92,10 @@ export function pickOrder(cards: readonly Card[], currentId?: string): Card[] {
   return [...cards].sort((a, b) => Number(b.localId === currentId) - Number(a.localId === currentId) || b.addedAt - a.addedAt)
 }
 
+export function togglePin(list: readonly Watch[], localId: string): Watch[] {
+  return list.map(one => (one.localId === localId ? { ...one, isPinned: !one.isPinned } : one))
+}
+
 function baseName(path: unknown): string {
   return typeof path === 'string' ? (path.split('/').pop() ?? path) : ''
 }
