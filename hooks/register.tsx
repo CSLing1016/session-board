@@ -718,9 +718,7 @@ async function drawBoard($: any, e: any): Promise<any> {
       {pinned.length > 0 && (
         <Box flexDirection="column">
           {sectionLine('置頂對話')}
-          <Box flexDirection="column" gap={1}>
-            {pinned.map(card => drawCard(card, false))}
-          </Box>
+          {pinned.map(card => drawCard(card, false))}
         </Box>
       )}
       {/* Their own column: the board's gap would leave a blank row between closed groups. */}
@@ -739,7 +737,7 @@ async function drawBoard($: any, e: any): Promise<any> {
                 onPress={() => void update($, groupsOpen, old => ({ ...old, [group.status]: !isGroupOpen(group.status, old ?? {}) }))}
               />
               {isOpen && (
-                <Box flexDirection="column" gap={1}>
+                <Box flexDirection="column">
                   {group.cards.map(card => drawCard(card, false))}
                 </Box>
               )}
