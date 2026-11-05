@@ -1,6 +1,6 @@
 {
   "name": "session-board",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A dashboard of the sessions you chose to watch: status, latest action, and what each one needs from you",
   "author": { "name": "CSLing1016" },
   "repository": "https://github.com/CSLing1016/session-board",
