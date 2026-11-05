@@ -4,6 +4,8 @@ A Claude Code mod: a side-pane dashboard for the sessions you choose to watch. T
 
 Claude Code 的對話儀表板 mod，桌面版和 CLI 都能用。同時開很多對話時，不用一個一個切過去看，在側邊面板就能知道每個對話的狀態、正在做什麼，以及跑完後為什麼需要你。
 
+![對話儀表板的畫面：當前對話、置頂對話，以及依狀態分組的其他對話](docs/board.png)
+
 ## 安裝
 
 需要 Claude Code。目前在 macOS 上的 v2.1.318 開發和測試。
