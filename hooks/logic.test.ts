@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Report, Watch } from '../types'
-import { badgeLabel, nextRoundBaseline, roundMembers, ASKING_SENTENCE, FAILED_SENTENCE, HEARTBEAT_MS, INTERRUPTED_SENTENCE, askingAt, interruptedAt, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, groupsOf, isGroupOpen, sortCards, statusOf, togglePin, updatedLabel } from './logic'
+import { badgeLabel, nextRoundBaseline, roundMembers, ASKING_SENTENCE, FAILED_SENTENCE, HEARTBEAT_MS, INTERRUPTED_SENTENCE, askingAt, interruptedAt, LOST_AFTER_MS, LOST_SENTENCE, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, titleFromTranscript, describeTool, helpersOf, mainAction, needsHeartbeat, openPlan, parseSentence, pickOrder, resumeCommand, sentencePrompt, groupsOf, isGroupOpen, matchesQuery, sortCards, statusOf, togglePin, updatedLabel } from './logic'
 
 const NOW = 1
 
@@ -251,4 +251,12 @@ test('subagents of a session gone silent leave the card: a calling one stays cal
   const quiet = cardOf(watch, { ...ended('none', 50), aliveAt: 100, helpers }, 'here', later)
   expect([quiet.status, quiet.helpers]).toEqual(['lost', []])
   expect(statusOf(ended('none', 50), watch, later)).toBe('done')
+})
+
+test('a search matches the title or the description, ignoring case and spaces around it', () => {
+  const card = { title: 'Weekly 週報', description: '每週五交' }
+  expect(matchesQuery(card, '')).toBe(true)
+  expect(matchesQuery(card, ' weekly ')).toBe(true)
+  expect(matchesQuery(card, '週五')).toBe(true)
+  expect(matchesQuery(card, '月報')).toBe(false)
 })

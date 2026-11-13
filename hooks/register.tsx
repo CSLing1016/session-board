@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Candidate, Card, Draft, GroupsOpen, Presence, Report, SelfInfo, Status, Terminal, View, Watch } from '../types'
-import { askingAt, BADGE, BADGE_COLOR, badgeLabel, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, groupsOf, isGroupOpen, openPlan, pickOrder, helpersOf, interruptedAt, mainAction, needsHeartbeat, nextRoundBaseline, parseSentence, resumeCommand, roundMembers, sentencePrompt, sortCards, STATUS_NAME, titleFromTranscript, togglePin, updatedLabel } from './logic'
+import { askingAt, BADGE, BADGE_COLOR, badgeLabel, BORDER_COLOR, candidateFromRecord, cardOf, cliIdOf, cwdFromTranscript, describeTool, folderName, groupsOf, isGroupOpen, matchesQuery, openPlan, pickOrder, helpersOf, interruptedAt, mainAction, needsHeartbeat, nextRoundBaseline, parseSentence, resumeCommand, roundMembers, sentencePrompt, sortCards, STATUS_NAME, titleFromTranscript, togglePin, updatedLabel } from './logic'
 
 const PLUGIN = 'session-board'
 const PANE = 'session-board'
@@ -87,6 +87,7 @@ const notice = atom({ plugin: 'session-board', key: 'notice' } as const, '')
 const isMenuOpen = atom({ plugin: 'session-board', key: 'isMenuOpen' } as const, false)
 const isPaneOpen = atom({ plugin: 'session-board', key: 'isPaneOpen' } as const, false)
 const groupsOpen = atom({ plugin: 'session-board', key: 'groupsOpen' } as const, {} as GroupsOpen)
+const searchQuery = atom({ plugin: 'session-board', key: 'query' } as const, '')
 const self = atom({ plugin: 'session-board', key: 'self' } as const, null as SelfInfo | null)
 
 // Every session: what it says about itself.
@@ -580,7 +581,10 @@ async function drawBoard($: any, e: any): Promise<any> {
   const menuOpen = await read($, isMenuOpen)
   const me = await read($, self)
   const myCard = me ? list.find(card => card.localId === me.localId) : undefined
-  const others = list.filter(card => card !== myCard)
+  const query = (await read($, searchQuery)) ?? ''
+  const isSearching = query.trim() !== ''
+  // The current session is always shown: a search is for finding the others.
+  const others = list.filter(card => card !== myCard && matchesQuery(card, query))
   const pinned = others.filter(card => card.isPinned)
   const rest = others.filter(card => !card.isPinned)
   const opened = (await read($, groupsOpen)) ?? {}
@@ -614,13 +618,17 @@ async function drawBoard($: any, e: any): Promise<any> {
   const drawCard = (card: Card, isCurrent: boolean) => (
         <Box key={`card-${card.localId}`} flexDirection="column" borderStyle="round" borderColor={BORDER_COLOR[card.status]} backgroundColor={isCurrent ? currentBackground : undefined} paddingX={1}>
           {/* The label floats over room the padding keeps free: a shrinking row Box clips its Text on the desktop instead of wrapping it. */}
-          <Box position="relative" flexDirection="column" paddingRight={card.helpers.length > 0 ? BADGE_ROOM_LONG : BADGE_ROOM} paddingLeft={isCurrent ? 0 : PIN_ROOM[isTerminal ? 'terminal' : 'desktop']}>
-            {!isCurrent && (
-              <Box position="absolute" top={0} left={0}>
-                {/* The terminal's own [ label ] pads the icon: plain draws the brackets as written. A desktop's button has its own frame. */}
-                <Button key={`pin-${card.localId}`} {...(isTerminal ? { plain: true as const, label: '[📌]' } : { label: '📌' })} onPress={() => void changeWatch($, watches => togglePin(watches, card.localId))} />
-              </Box>
-            )}
+          <Box position="relative" flexDirection="column" paddingRight={card.helpers.length > 0 ? BADGE_ROOM_LONG : BADGE_ROOM} paddingLeft={PIN_ROOM[isTerminal ? 'terminal' : 'desktop']}>
+            <Box position="absolute" top={0} left={0}>
+              {/* The terminal's own [ label ] pads the icon: plain draws the brackets as written. A desktop's button has its own frame.
+                  Unpinned is a dim ring, not a dim pin: an emoji keeps its colors however dim it is asked to be. */}
+              <Button
+                key={`pin-${card.localId}`}
+                dimColor={!card.isPinned}
+                {...(isTerminal ? { plain: true as const, label: card.isPinned ? '[📌]' : '[○]' } : { label: card.isPinned ? '📌' : '○' })}
+                onPress={() => void changeWatch($, watches => togglePin(watches, card.localId))}
+              />
+            </Box>
             {/* One string: a long sentence wraps on the desktop, and this title, split in two children, did not. */}
             <Text bold>{`${card.title}${card.presence === 'archived' ? '（已封存）' : card.presence === 'deleted' ? '（已刪除）' : ''}`}</Text>
             {badge(card.status, badgeLabel(card))}
@@ -685,6 +693,16 @@ async function drawBoard($: any, e: any): Promise<any> {
           )}
         </Box>
       </Box>
+      <Input
+        key="search"
+        label="搜尋"
+        placeholder="輸入標題或描述"
+        // It filters as it is typed: Enter has nothing left to do, and the default hint would say submit.
+        submitLabel="完成"
+        value={query}
+        onInput={(value: string) => void update($, searchQuery, () => value)}
+        onSubmit={() => undefined}
+      />
       {shown}
       {/* Each section its own column: the board's gap would leave a blank row under its name. */}
       {me && (
@@ -724,9 +742,10 @@ async function drawBoard($: any, e: any): Promise<any> {
       {/* Their own column: the board's gap would leave a blank row between closed groups. */}
       <Box flexDirection="column">
         {(me || pinned.length > 0) && (rest.length > 0 || pinned.length === 0) && sectionLine('其他對話')}
-        {others.length === 0 && <Text dimColor>{me ? '還沒有監控其他對話。' : '還沒有監控的對話。'}</Text>}
+        {others.length === 0 && <Text dimColor>{isSearching ? '找不到符合的對話。' : me ? '還沒有監控其他對話。' : '還沒有監控的對話。'}</Text>}
         {groupsOf(rest).map(group => {
-          const isOpen = isGroupOpen(group.status, opened)
+          // A match hidden in a closed group would look like no match.
+          const isOpen = isSearching || isGroupOpen(group.status, opened)
 
           return (
             <Box key={`group-box-${group.status}`} flexDirection="column">

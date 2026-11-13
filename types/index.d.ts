@@ -68,6 +68,7 @@ declare module 'claude-code' {
       isMenuOpen: boolean
       isPaneOpen: boolean
       groupsOpen: GroupsOpen
+      query: string
       self: SelfInfo | null
     }
   }

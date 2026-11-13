@@ -119,6 +119,13 @@ export function sortCards(cards: readonly Card[]): Card[] {
   )
 }
 
+// A search matches what the person wrote on the card, ignoring case.
+export function matchesQuery(card: Pick<Card, 'title' | 'description'>, query: string): boolean {
+  const wanted = query.trim().toLowerCase()
+
+  return !wanted || `${card.title}\n${card.description}`.toLowerCase().includes(wanted)
+}
+
 // Open by default: what may need the person, or is still moving.
 const OPEN_BY_DEFAULT: readonly Status[] = ['calling', 'lost', 'working']
 

@@ -221,7 +221,7 @@ test('pinned sessions get a section of their own above the others', async ($, on
   }
 })
 
-test('with nothing pinned there is no pinned section, and the current session has no pin', async ($, on) => {
+test('with nothing pinned there is no pinned section, and every card, the current one too, shows whether it is pinned', async ($, on) => {
   on('state.get', (_, e) => ({
     value:
       e.key === 'cards'
@@ -232,8 +232,8 @@ test('with nothing pinned there is no pinned section, and the current session ha
   }))
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /置頂對話/ })).toBeFalsy()
-  expect(await ui.find({ type: 'Button', key: 'pin-local_me' })).toBeFalsy()
-  expect(await ui.find({ type: 'Button', key: 'pin-local_a' })).toBeTruthy()
+  expect((await ui.find({ type: 'Button', key: 'pin-local_me' }))?.text).toBe('[○]')
+  expect((await ui.find({ type: 'Button', key: 'pin-local_a' }))?.text).toBe('[○]')
   await ui.unmount()
 })
 
@@ -275,4 +275,42 @@ test('a card with subagents running shows their progress in place of its status'
     expect(await ui.find({ type: 'Button', key: 'ack-local_a' })).toBeTruthy()
     await ui.unmount()
   }
+})
+
+test('a pinned card shows the pin, an unpinned one a ring', async ($, on) => {
+  on('state.get', (_, e) => ({
+    value: e.key === 'cards' ? { value: [{ ...CALLING, isPinned: true }], version: 1 } : { value: undefined, version: 0 },
+  }))
+  for (const [surface, pin] of [['terminal', '[📌]'], ['desktop', '📌']] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect((await ui.find({ type: 'Button', key: 'pin-local_a' }))?.text).toBe(pin)
+    await ui.unmount()
+  }
+})
+
+test('a search keeps the current session, opens every group, and says when nothing matches', async ($, on) => {
+  const done: Card = { ...CALLING, localId: 'local_d', title: '上週週報', status: 'done' }
+  const other: Card = { ...CALLING, localId: 'local_o', title: '客戶提案' }
+  let query = '週報'
+  on('state.get', (_, e) => ({
+    value:
+      e.key === 'cards'
+        ? { value: [{ ...CALLING, localId: 'local_me' }, done, other], version: 1 }
+        : e.key === 'self'
+          ? { value: ME, version: 1 }
+          : e.key === 'query'
+            ? { value: query, version: 1 }
+            : { value: undefined, version: 0 },
+  }))
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ key: 'search' })).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'pin-local_me' })).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'open-local_d' })).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'open-local_o' })).toBeFalsy()
+  await ui.unmount()
+  query = '沒有這個'
+  const none = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await none.find({ type: 'Text', text: /找不到/ }))?.text).toBe('找不到符合的對話。')
+  expect(await none.find({ type: 'Button', key: 'pin-local_me' })).toBeTruthy()
+  await none.unmount()
 })
