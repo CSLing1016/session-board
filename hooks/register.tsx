@@ -895,10 +895,10 @@ export const register: Register = on => {
     const calling = (await read($, cards)).filter(card => card.status === 'calling').length
 
     return (
-      <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
         <Box flexGrow={1}>{below}</Box>
-        <Button key="open-board" onPress={() => void openBoard($)}>
-          {calling > 0 ? `📋 儀表板・${calling} 個找你` : '📋 儀表板'}
+        <Button key="open-board" plain onPress={() => void openBoard($)}>
+          {calling > 0 ? `[📋 儀表板・${calling} 個找你]` : '[📋 儀表板]'}
         </Button>
       </Box>
     )
